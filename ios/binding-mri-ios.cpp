@@ -402,7 +402,11 @@ static void mriBindingInit() {
         // Create a module that provides public wrappers for common private methods
         "module MKXPZPrivateMethodFix\n"
         "  # Common methods that games might define as private but call publicly\n"
-        "  PRIVATE_METHODS_TO_FIX = [:dispose, :disposed?, :update, :refresh, :terminate, :create, :contents]\n"
+        "  # Core RGSS methods\n"
+        "  PRIVATE_METHODS_TO_FIX = [:dispose, :disposed?, :update, :refresh, :terminate, :create, :contents,\n"
+        "    # Pokemon Essentials methods (defined via module_function, which makes them private in Ruby 3+)\n"
+        "    :pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay,\n"
+        "    :pbConfirmMessage, :pbConfirmMessageSerious, :pbShowCommandsBlack, :pbShowCommandsBorde]\n"
         "  \n"
         "  def self.included(base)\n"
         "    base.class_eval do\n"
@@ -436,6 +440,18 @@ static void mriBindingInit() {
         // Apply fix to Object so all classes get it
         "class Object\n"
         "  include MKXPZPrivateMethodFix\n"
+        "end\n"
+        "\n"
+        // Pokemon Essentials specific: Make Kernel module_function methods public
+        // This is safe because we only target methods that ARE defined and ARE private
+        "module Kernel\n"
+        "  class << self\n"
+        "    [:pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay,\n"
+        "     :pbConfirmMessage, :pbConfirmMessageSerious, :pbShowCommandsBlack, :pbShowCommandsBorde,\n"
+        "     :pbChooseNumber, :pbChoosePokemon, :pbChooseNonEggPokemon, :pbChooseAblePokemon].each do |m|\n"
+        "      public m if private_method_defined?(m) rescue nil\n"
+        "    end\n"
+        "  end\n"
         "end\n"
         , &state);
     
