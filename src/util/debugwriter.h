@@ -61,6 +61,10 @@ public:
 
 	~Debug()
 	{
+		extern int g_mkxpz_log_level;
+		if (g_mkxpz_log_level < 4) // 4 is MKXPZ_LOG_DEBUG
+			return;
+
 #ifdef __ANDROID__
 		__android_log_write(ANDROID_LOG_DEBUG, "mkxp", buf.str().c_str());
 #else

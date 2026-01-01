@@ -1008,14 +1008,14 @@ struct GraphicsPrivate {
     void swapGLBuffer() {
         static int swapCount = 0;
         if (swapCount < 5 || swapCount % 100 == 0) {
-            fprintf(stderr, "[MKXP-Z] DEBUG: swapGLBuffer #%d starting...\n", swapCount);
+            MKXP_DEBUG_LOG("swapGLBuffer #%d starting...\n", swapCount);
         }
         fpsLimiter.delay();
         
         // iOS: Bind SDL's framebuffer before swap
         unsigned int fboId = mkxpz_get_sdl_framebuffer();
         if (swapCount < 5) {
-            fprintf(stderr, "[MKXP-Z] DEBUG: FBO ID for swap: %u\n", fboId);
+            MKXP_DEBUG_LOG("FBO ID for swap: %u\n", fboId);
         }
         FBO::bind(FBO::ID(fboId));
 
@@ -1025,7 +1025,7 @@ struct GraphicsPrivate {
         swapCount++;
         
         if (swapCount <= 5 || swapCount % 100 == 0) {
-            fprintf(stderr, "[MKXP-Z] DEBUG: swapGLBuffer #%d completed, frame count: %d\n", swapCount, frameCount);
+            MKXP_DEBUG_LOG("swapGLBuffer #%d completed, frame count: %d\n", swapCount, frameCount);
         }
         threadData->ethread->notifyFrame();
     }
@@ -1219,7 +1219,7 @@ double Graphics::lastUpdate() {
 void Graphics::update(bool checkForShutdown) {
     static int updateCount = 0;
     if (updateCount < 5 || updateCount % 100 == 0) {
-        fprintf(stderr, "[MKXP-Z] DEBUG: Graphics::update #%d starting, checkForShutdown=%d...\n", updateCount, checkForShutdown);
+        MKXP_DEBUG_LOG("Graphics::update #%d starting, checkForShutdown=%d...\n", updateCount, checkForShutdown);
     }
     p->threadData->rqWindowAdjust.wait();
     p->last_update = shState->runTime();
@@ -1263,7 +1263,7 @@ void Graphics::update(bool checkForShutdown) {
     
     p->checkResize();
     if (updateCount < 5 || updateCount % 100 == 0) {
-        fprintf(stderr, "[MKXP-Z] DEBUG: Graphics::update #%d calling redrawScreen...\n", updateCount);
+        MKXP_DEBUG_LOG("Graphics::update #%d calling redrawScreen...\n", updateCount);
     }
     p->redrawScreen();
     updateCount++;

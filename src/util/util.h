@@ -152,4 +152,16 @@ inline C *dataPtr(std::vector<C> &v)
 #define DEF_ATTR_SIMPLE_STATIC(klass, name, type, location) \
 	DEF_ATTR_SIMPLE_DETAILED(klass, name, type, location, )
 
+extern int g_mkxpz_log_level;
+
+// Log levels: 0=none, 1=error, 2=ok, 3=info, 4=debug
+#define MKXP_DEBUG_LOG(fmt, ...) do { if (g_mkxpz_log_level >= 4) fprintf(stderr, "[MKXP-Z] " fmt "\n", ##__VA_ARGS__); } while(0)
+#define MKXP_INFO_LOG(fmt, ...) do { if (g_mkxpz_log_level >= 3) fprintf(stderr, "[MKXP-Z] " fmt "\n", ##__VA_ARGS__); } while(0)
+#define MKXP_OK_LOG(fmt, ...) do { if (g_mkxpz_log_level >= 2) fprintf(stderr, "[MKXP-Z] " fmt "\n", ##__VA_ARGS__); } while(0)
+#define MKXP_ERROR_LOG(fmt, ...) do { if (g_mkxpz_log_level >= 1) fprintf(stderr, "[MKXP-Z] ERROR: " fmt "\n", ##__VA_ARGS__); } while(0)
+
+// Convenience macro to conditionally fprintf based on log level
+// This can be used to wrap existing fprintf calls without changing their signature
+#define MKXP_COND_LOG(level, ...) do { if (g_mkxpz_log_level >= level) fprintf(__VA_ARGS__); } while(0)
+
 #endif // UTIL_H

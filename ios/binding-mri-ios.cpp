@@ -168,10 +168,10 @@ json5pp::value rb2json(VALUE v);
 RB_METHOD(mkxpParseCSV);
 
 static void mriBindingInit() {
-    fprintf(stderr, "[MKXP-Z] DEBUG: mriBindingInit starting...\n");
-    fprintf(stderr, "[MKXP-Z] DEBUG: tableBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: mriBindingInit starting...");
+    MKXP_DEBUG_LOG("DEBUG: tableBindingInit...");
     tableBindingInit();
-    fprintf(stderr, "[MKXP-Z] DEBUG: etcBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: etcBindingInit...");
     etcBindingInit();
     fontBindingInit();
     bitmapBindingInit();
@@ -187,14 +187,14 @@ static void mriBindingInit() {
         tilemapVXBindingInit();
     }
     
-    fprintf(stderr, "[MKXP-Z] DEBUG: inputBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: inputBindingInit...");
     inputBindingInit();
-    fprintf(stderr, "[MKXP-Z] DEBUG: audioBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: audioBindingInit...");
     audioBindingInit();
-    fprintf(stderr, "[MKXP-Z] DEBUG: graphicsBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: graphicsBindingInit...");
     graphicsBindingInit();
     
-    fprintf(stderr, "[MKXP-Z] DEBUG: fileIntBindingInit...\n");
+    MKXP_DEBUG_LOG("DEBUG: fileIntBindingInit...");
     fileIntBindingInit();
     
 #ifdef MKXPZ_MINIFFI
@@ -680,10 +680,10 @@ static void mriBindingInit() {
     
     if (state == 0) {
         Debug() << "BASS stub installed successfully";
-        fprintf(stderr, "[MKXP-Z] DEBUG: mriBindingInit completed successfully\n");
+        MKXP_DEBUG_LOG("DEBUG: mriBindingInit completed successfully");
     } else {
         Debug() << "Warning: Could not install BASS stub";
-        fprintf(stderr, "[MKXP-Z] DEBUG: mriBindingInit completed with warnings\n");
+        MKXP_DEBUG_LOG("DEBUG: mriBindingInit completed with warnings");
         rb_errinfo();
     }
     
@@ -712,10 +712,10 @@ static void mriBindingInit() {
     
     if (state == 0) {
         Debug() << "Kernel#throw uncaught throw handler installed successfully";
-        fprintf(stderr, "[MKXP-Z] DEBUG: Kernel#throw patch installed\n");
+        MKXP_DEBUG_LOG("DEBUG: Kernel#throw patch installed");
     } else {
         Debug() << "Warning: Could not install Kernel#throw patch";
-        fprintf(stderr, "[MKXP-Z] DEBUG: Kernel#throw patch failed\n");
+        MKXP_DEBUG_LOG("DEBUG: Kernel#throw patch failed");
         rb_errinfo();
     }
     
@@ -737,7 +737,7 @@ static void mriBindingInit() {
     // affecting newer games that might rely on modern Ruby behavior.
     // =============================================================================
     if (rgssVer <= 2) {
-        fprintf(stderr, "[MKXP-Z] INFO: Applying legacy Ruby 1.8/1.9 compatibility shims for RGSS%d\n", rgssVer);
+        MKXP_INFO_LOG("Applying legacy Ruby 1.8/1.9 compatibility shims for RGSS%d\n", rgssVer);
         
         // Fixnum and Bignum were unified into Integer in Ruby 2.4
         // Many old scripts check for these classes directly
@@ -818,9 +818,9 @@ static void mriBindingInit() {
             "end\n",
             &state);
         
-        fprintf(stderr, "[MKXP-Z] INFO: Legacy Ruby compatibility shims installed for RGSS%d\n", rgssVer);
+        MKXP_INFO_LOG("Legacy Ruby compatibility shims installed for RGSS%d\n", rgssVer);
     } else {
-        fprintf(stderr, "[MKXP-Z] DEBUG: Skipping legacy shims for RGSS%d (not needed for VX Ace)\n", rgssVer);
+        MKXP_DEBUG_LOG("Skipping legacy shims for RGSS%d (not needed for VX Ace)\n", rgssVer);
     }
     
     // Set $stdout and its ilk accordingly on Windows
@@ -1520,10 +1520,10 @@ bool evalScript(VALUE string, const char *filename)
 #define SCRIPT_SECTION_FMT (rgssVer >= 3 ? "{%04ld}" : "Section%03ld")
 
 static void runRMXPScripts(BacktraceData &btData) {
-    fprintf(stderr, "[MKXP-Z] DEBUG: runRMXPScripts starting...\n");
+    MKXP_DEBUG_LOG("runRMXPScripts starting...");
     const Config &conf = shState->rtData().config;
     const std::string &scriptPack = conf.game.scripts;
-    fprintf(stderr, "[MKXP-Z] DEBUG: Script pack path: %s\n", scriptPack.c_str());
+    MKXP_DEBUG_LOG("Script pack path: %s\n", scriptPack.c_str());
     
     if (scriptPack.empty()) {
         fprintf(stderr, "[MKXP-Z] ERROR: No script file specified!\n");
@@ -1556,7 +1556,7 @@ static void runRMXPScripts(BacktraceData &btData) {
     rb_gv_set("$RGSS_SCRIPTS", scriptArray);
     
     long scriptCount = RARRAY_LEN(scriptArray);
-    fprintf(stderr, "[MKXP-Z] DEBUG: Loaded %ld scripts from archive\n", scriptCount);
+    MKXP_DEBUG_LOG("Loaded %ld scripts from archive\n", scriptCount);
     
     std::string decodeBuffer;
     // Increased from 0x1000 (4KB) to 0x300000 (3MB) to prevent thread crashes
@@ -1564,7 +1564,7 @@ static void runRMXPScripts(BacktraceData &btData) {
     // Scripts.rxdata files that decompress to very large scripts.
     decodeBuffer.resize(0x300000);
     size_t initialBufferSize = decodeBuffer.size();
-    fprintf(stderr, "[MKXP-Z] DEBUG: Initial decode buffer size: %zu bytes (%.1f MB)\n", 
+    MKXP_DEBUG_LOG("Initial decode buffer size: %zu bytes (%.1f MB)\n", 
             initialBufferSize, initialBufferSize / (1024.0 * 1024.0));
     
     for (long i = 0; i < scriptCount; ++i) {
@@ -1630,11 +1630,11 @@ static void runRMXPScripts(BacktraceData &btData) {
     if (exc != Qnil)
         return;
     
-    fprintf(stderr, "[MKXP-Z] DEBUG: Starting main script execution loop...\n");
+    MKXP_DEBUG_LOG("Starting main script execution loop...");
     while (true) {
         for (long i = 0; i < scriptCount; ++i) {
             if (shState->rtData().rqTerm) {
-                fprintf(stderr, "[MKXP-Z] DEBUG: Termination requested at script %ld\n", i);
+                MKXP_DEBUG_LOG("Termination requested at script %ld\n", i);
                 break;
             }
             
@@ -1702,12 +1702,12 @@ static void runRMXPScripts(BacktraceData &btData) {
             
             // Log every 50th script and the first 10
             if (i < 10 || i % 50 == 0) {
-                fprintf(stderr, "[MKXP-Z] DEBUG: Executing script %ld: %s\n", i, scriptName);
+                MKXP_DEBUG_LOG("Executing script %ld: %s\n", i, scriptName);
             }
             
             evalString(string, fname, &state);
             if (state) {
-                fprintf(stderr, "[MKXP-Z] DEBUG: Script %ld (%s) caused error state: %d\n", i, scriptName, state);
+                MKXP_DEBUG_LOG("Script %ld (%s) caused error state: %d\n", i, scriptName, state);
                 break;
             }
         }
@@ -2033,15 +2033,15 @@ static void mriBindingExecute() {
     static bool rubyInitialized = false;
     
     // Defensive null check for shState before accessing config
-    fprintf(stderr, "[MKXP-Z] DEBUG: mriBindingExecute started, checking shState...\n");
+    MKXP_DEBUG_LOG("mriBindingExecute started, checking shState...");
     if (!shState) {
         fprintf(stderr, "[MKXP-Z] ERROR: SharedState is null! Cannot proceed.\n");
         return;
     }
-    fprintf(stderr, "[MKXP-Z] DEBUG: shState is valid (%p)\n", (void*)shState);
+    MKXP_DEBUG_LOG("shState is valid (%p)\n", (void*)shState);
     
     Config &conf = shState->rtData().config;
-    fprintf(stderr, "[MKXP-Z] DEBUG: Config loaded, RGSS version: %d\n", conf.rgssVersion);
+    MKXP_DEBUG_LOG("Config loaded, RGSS version: %d\n", conf.rgssVersion);
     
     // iOS Font Fix: Increase fontScale if it's at default value
     // Pokemon Essentials and other games using custom fonts may have clipped text
@@ -2049,7 +2049,7 @@ static void mriBindingExecute() {
     // ensure the full glyph height is rendered.
     if (conf.fontScale < 0.1f || conf.fontScale == 1.0f) {
         conf.fontScale = 1.5f;
-        fprintf(stderr, "[MKXP-Z] INFO: iOS font fix applied - fontScale set to %.1f\n", conf.fontScale);
+        MKXP_INFO_LOG("iOS font fix applied - fontScale set to %.1f\n", conf.fontScale);
     }
     
 #if RAPI_MAJOR >= 2
@@ -2060,42 +2060,42 @@ static void mriBindingExecute() {
          * but not doing it will lead to crashes due to closed
          * stdio streams on some platforms (eg. Windows) */
         // iOS fix: Provide valid argc/argv to avoid null pointer crash in ruby_sysinit
-        fprintf(stderr, "[MKXP-Z] DEBUG: About to call ruby_sysinit...\n");
+        MKXP_DEBUG_LOG("About to call ruby_sysinit...");
         static char progname[] = "mkxp-z";
         static char *ios_argv[] = { progname, nullptr };
         int argc = 1;
         char **argv = ios_argv;
         ruby_sysinit(&argc, &argv);
-        fprintf(stderr, "[MKXP-Z] DEBUG: ruby_sysinit completed\n");
+        MKXP_DEBUG_LOG("ruby_sysinit completed");
         
         // iOS fix: Use explicit ruby_init_stack with LOCAL variable from function top scope
         // CRITICAL: The stack variable MUST remain in scope for the ENTIRE Ruby execution!
         // Ruby uses this to determine the stack base for GC scanning.
         // If the variable goes out of scope, the GC will access invalid memory causing EXC_BAD_ACCESS.
         // We use the volatile stack_anchor_start declared at the top of this function.
-        fprintf(stderr, "[MKXP-Z] DEBUG: About to call ruby_init_stack with stack anchor at %p...\n", 
+        MKXP_DEBUG_LOG("About to call ruby_init_stack with stack anchor at %p...\n", 
                 (void*)&stack_anchor_start);
         ruby_init_stack((void*)&stack_anchor_start);
-        fprintf(stderr, "[MKXP-Z] DEBUG: ruby_init_stack completed\n");
+        MKXP_DEBUG_LOG("ruby_init_stack completed");
         
-        fprintf(stderr, "[MKXP-Z] DEBUG: About to call ruby_init...\n");
+        MKXP_DEBUG_LOG("About to call ruby_init...");
         ruby_init();
-        fprintf(stderr, "[MKXP-Z] DEBUG: ruby_init completed\n");
+        MKXP_DEBUG_LOG("ruby_init completed");
         
         // Initialize statically linked Ruby extensions (including zlib)
-        fprintf(stderr, "[MKXP-Z] DEBUG: About to call Init_ext for static extensions...\n");
+        MKXP_DEBUG_LOG("About to call Init_ext for static extensions...");
         Init_ext();
-        fprintf(stderr, "[MKXP-Z] DEBUG: Init_ext completed - static extensions loaded\n");
+        MKXP_DEBUG_LOG("Init_ext completed - static extensions loaded");
         
         rubyInitialized = true;
     } else {
-        fprintf(stderr, "[MKXP-Z] DEBUG: Ruby already initialized, skipping init calls\n");
+        MKXP_DEBUG_LOG("Ruby already initialized, skipping init calls");
         // Even when reusing Ruby, we need to ensure the stack is properly anchored
         // This is important for proper GC behavior across game launches
         ruby_init_stack((void*)&stack_anchor_start);
     }
     
-    fprintf(stderr, "[MKXP-Z] DEBUG: About to call ruby_options...\n");
+    MKXP_DEBUG_LOG("About to call ruby_options...");
     std::vector<const char*> rubyArgsC{"mkxp-z"};
     rubyArgsC.push_back("-e ");
     void *node;
@@ -2127,7 +2127,7 @@ static void mriBindingExecute() {
     } else {
         node = ruby_options(rubyArgsC.size(), const_cast<char**>(rubyArgsC.data()));
     }
-    fprintf(stderr, "[MKXP-Z] DEBUG: ruby_options completed, node=%p\n", node);
+    MKXP_DEBUG_LOG("ruby_options completed, node=%p\n", node);
     
     int state;
     bool valid = ruby_executable_node(node, &state);

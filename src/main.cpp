@@ -124,18 +124,18 @@ static SDL_GLContext initGL(SDL_Window *win, Config &conf,
 extern "C" unsigned int mkxpz_get_sdl_framebuffer() __attribute__((weak));
 
 int rgssThreadFun(void *userdata) {
-  fprintf(stderr, "[MKXP-Z] DEBUG: rgssThreadFun started\n");
+  MKXP_DEBUG_LOG("DEBUG: rgssThreadFun started");
   RGSSThreadData *threadData = static_cast<RGSSThreadData *>(userdata);
 
 #ifdef MKXPZ_INIT_GL_LATER
-  fprintf(stderr, "[MKXP-Z] DEBUG: About to call initGL (MKXPZ_INIT_GL_LATER)...\n");
+  MKXP_DEBUG_LOG("DEBUG: About to call initGL (MKXPZ_INIT_GL_LATER)...");
   threadData->glContext =
       initGL(threadData->window, threadData->config, threadData);
   if (!threadData->glContext)
     return 0;
-  fprintf(stderr, "[MKXP-Z] DEBUG: initGL completed\n");
+  MKXP_DEBUG_LOG("DEBUG: initGL completed");
 #else
-  fprintf(stderr, "[MKXP-Z] DEBUG: About to call SDL_GL_MakeCurrent...\n");
+  MKXP_DEBUG_LOG("DEBUG: About to call SDL_GL_MakeCurrent...");
   
   // Retry loop for context acquisition to handle potential race conditions
   bool contextAcquired = false;
@@ -144,16 +144,16 @@ int rgssThreadFun(void *userdata) {
       if (ret == 0) {
           const char* version = (const char*)gl.GetString(GL_VERSION);
           if (version != nullptr) {
-              fprintf(stderr, "[MKXP-Z] ✅ Context acquired successfully on attempt %d. Version: %s\n", i+1, version);
+              MKXP_DEBUG_LOG("✅ Context acquired successfully on attempt %d. Version: %s", i+1, version);
               contextAcquired = true;
               break;
           } else {
-               fprintf(stderr, "[MKXP-Z] ❌ MakeCurrent success but GL_VERSION is NULL (Attempt %d). Retrying...\n", i+1);
+               MKXP_DEBUG_LOG("❌ MakeCurrent success but GL_VERSION is NULL (Attempt %d). Retrying...", i+1);
                // Try to unbind first?
                SDL_GL_MakeCurrent(threadData->window, NULL);
           }
       } else {
-          fprintf(stderr, "[MKXP-Z] ❌ SDL_GL_MakeCurrent failed: %s (Attempt %d)\n", SDL_GetError(), i+1);
+          MKXP_DEBUG_LOG("❌ SDL_GL_MakeCurrent failed: %s (Attempt %d)", SDL_GetError(), i+1);
       }
       SDL_Delay(100); // Wait 100ms before retry
   }
@@ -161,7 +161,7 @@ int rgssThreadFun(void *userdata) {
   if (!contextAcquired) {
       fprintf(stderr, "[MKXP-Z] 🚨 FATAL: Could not acquire OpenGL context after 10 attempts!\n");
   } else {
-      fprintf(stderr, "[MKXP-Z] DEBUG: SDL_GL_MakeCurrent completed successfully\n");
+      MKXP_DEBUG_LOG("DEBUG: SDL_GL_MakeCurrent completed successfully");
   }
   
   // iOS FIX: Get SDL's actual framebuffer ID from its internal OpenGL view
@@ -187,23 +187,23 @@ int rgssThreadFun(void *userdata) {
 #endif
 
   /* Setup AL context */
-  fprintf(stderr, "[MKXP-Z] DEBUG: About to create OpenAL context...\n");
+  MKXP_DEBUG_LOG("DEBUG: About to create OpenAL context...");
   ALCcontext *alcCtx = alcCreateContext(threadData->alcDev, 0);
 
   if (!alcCtx) {
     rgssThreadError(threadData, "Error creating OpenAL context");
     return 0;
   }
-  fprintf(stderr, "[MKXP-Z] DEBUG: OpenAL context created\n");
+  MKXP_DEBUG_LOG("DEBUG: OpenAL context created");
 
-  fprintf(stderr, "[MKXP-Z] DEBUG: About to call alcMakeContextCurrent...\n");
+  MKXP_DEBUG_LOG("DEBUG: About to call alcMakeContextCurrent...");
   alcMakeContextCurrent(alcCtx);
-  fprintf(stderr, "[MKXP-Z] DEBUG: alcMakeContextCurrent completed\n");
+  MKXP_DEBUG_LOG("DEBUG: alcMakeContextCurrent completed");
 
   try {
-    fprintf(stderr, "[MKXP-Z] DEBUG: About to call SharedState::initInstance...\n");
+    MKXP_DEBUG_LOG("DEBUG: About to call SharedState::initInstance...");
     SharedState::initInstance(threadData);
-    fprintf(stderr, "[MKXP-Z] DEBUG: SharedState::initInstance completed\n");
+    MKXP_DEBUG_LOG("DEBUG: SharedState::initInstance completed");
   } catch (const Exception &exc) {
     rgssThreadError(threadData, exc.msg);
     alcDestroyContext(alcCtx);
@@ -212,7 +212,7 @@ int rgssThreadFun(void *userdata) {
   }
 
   /* Start script execution */
-  fprintf(stderr, "[MKXP-Z] DEBUG: About to call scriptBinding->execute()...\n");
+  MKXP_DEBUG_LOG("DEBUG: About to call scriptBinding->execute()...");
   scriptBinding->execute();
 
   threadData->rqTermAck.set();
