@@ -688,6 +688,38 @@ static void mriBindingInit() {
     }
     
     // =============================================================================
+    // FIX: Pokemon Essentials and other games use throw :__mkxpz_break__ internally
+    // In Ruby 4.0, uncaught throws raise UncaughtThrowError instead of being ignored
+    // This patch wraps Kernel#throw to silently handle specific internal symbols
+    // =============================================================================
+    rb_eval_string_protect(
+        "module Kernel\n"
+        "  alias :__mkxpz_original_throw :throw\n"
+        "  def throw(tag, value = nil)\n"
+        "    begin\n"
+        "      __mkxpz_original_throw(tag, value)\n"
+        "    rescue UncaughtThrowError => e\n"
+        "      # List of internal symbols used by games that should be silently ignored\n"
+        "      internal_symbols = [:__mkxpz_break__, :break, :__break__]\n"
+        "      raise unless internal_symbols.include?(tag)\n"
+        "      # Return nil for silently caught throws\n"
+        "      nil\n"
+        "    end\n"
+        "  end\n"
+        "  module_function :throw\n"
+        "end\n",
+        &state);
+    
+    if (state == 0) {
+        Debug() << "Kernel#throw uncaught throw handler installed successfully";
+        fprintf(stderr, "[MKXP-Z] DEBUG: Kernel#throw patch installed\n");
+    } else {
+        Debug() << "Warning: Could not install Kernel#throw patch";
+        fprintf(stderr, "[MKXP-Z] DEBUG: Kernel#throw patch failed\n");
+        rb_errinfo();
+    }
+    
+    // =============================================================================
     // NOTE: The pbShowCommands private method issue in RPG Maker Essentials games
     // cannot be fixed safely at the MKXP-Z level without breaking other games.
     // Previous attempts to patch Module#module_function, Kernel.private, or 
