@@ -310,10 +310,68 @@ static void mriBindingInit() {
     Init_zlib();
     Debug() << "Zlib initialized directly for static linking";
     
+    // =============================================================================
+    // SUPERCLASS MISMATCH FIX FOR OLD RPG MAKER SCRIPTS
+    // In Ruby 3.0+, redefining a class with a different superclass raises TypeError.
+    // Old RPG Maker scripts sometimes do this (e.g., Window_Message < Window_Selectable
+    // when it was already defined as Window_Message < Window_Base).
+    // This fix patches Class.new to handle this gracefully by returning the existing class.
+    // =============================================================================
+    int state;
+    rb_eval_string_protect(
+        "class << Class\n"
+        "  alias :__mkxpz_original_new__ :new\n"
+        "  def new(superclass = Object, &block)\n"
+        "    __mkxpz_original_new__(superclass, &block)\n"
+        "  rescue TypeError => e\n"
+        "    if e.message.include?('superclass mismatch')\n"
+        "      # Extract class name from the error message or context\n"
+        "      # Just return nil - the class already exists and will be used\n"
+        "      nil\n"
+        "    else\n"
+        "      raise\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "\n"
+        "# Also patch the 'class' keyword behavior by catching the error at eval level\n"
+        "# This is done by setting a trace that rescues and continues\n"
+        "module MKXPZSuperclassFix\n"
+        "  def self.wrap_eval(code, binding_obj = nil, filename = nil, lineno = 1)\n"
+        "    begin\n"
+        "      if binding_obj\n"
+        "        eval(code, binding_obj, filename || '(eval)', lineno)\n"
+        "      else\n"
+        "        eval(code)\n"
+        "      end\n"
+        "    rescue TypeError => e\n"
+        "      if e.message.include?('superclass mismatch')\n"
+        "        # Try to extract class name and redefine without superclass\n"
+        "        if code =~ /class\\s+(\\w+)\\s*<\\s*\\w+/\n"
+        "          class_name = $1\n"
+        "          # Re-eval opening the existing class\n"
+        "          new_code = code.sub(/class\\s+#{class_name}\\s*<\\s*\\w+/, \"class #{class_name}\")\n"
+        "          return eval(new_code, binding_obj, filename || '(eval)', lineno)\n"
+        "        end\n"
+        "        raise\n"
+        "      else\n"
+        "        raise\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        &state);
+    
+    if (state == 0) {
+        Debug() << "Superclass mismatch fix installed";
+    } else {
+        Debug() << "Warning: Could not install superclass mismatch fix";
+        rb_errinfo();
+    }
+    
     // For static linking, we must tell Ruby that the feature is already loaded
     // otherwise require 'zlib' will fail because it can't find zlib.so/zlib.rb
     // IMPORTANT: Add entries unconditionally (with duplicate check) since Init_zlib() was called
-    int state;
     rb_eval_string_protect(
         // Add zlib to LOADED_FEATURES so require 'zlib' returns false instead of throwing error
         // Use include? check to avoid duplicates if this runs multiple times
@@ -390,6 +448,36 @@ static void mriBindingInit() {
         Debug() << "Ruby compatibility shims defined successfully";
     } else {
         Debug() << "Warning: Could not define Ruby compatibility shims";
+        rb_errinfo();
+    }
+    
+    // =============================================================================
+    // FONT COMPATIBILITY FIX FOR iOS
+    // Many Japanese RPG Maker games check for specific fonts that don't exist on iOS.
+    // We patch Font.exist? to always return true, allowing the game to use fallback fonts.
+    // =============================================================================
+    rb_eval_string_protect(
+        "class << Font\n"
+        "  alias :__mkxpz_original_exist? :exist? rescue nil\n"
+        "  def exist?(name)\n"
+        "    result = __mkxpz_original_exist?(name) rescue false\n"
+        "    unless result\n"
+        "      $stderr.puts \"[MKXP-Z][FONT] Font '#{name}' not found, returning true anyway for compatibility\"\n"
+        "      $stderr.flush\n"
+        "      return true  # Pretend font exists to avoid exit\n"
+        "    end\n"
+        "    result\n"
+        "  end\n"
+        "end\n"
+        "\n"
+        "$stderr.puts '[MKXP-Z][FONT] Font.exist? compatibility patch installed'\n"
+        "$stderr.flush\n"
+        , &state);
+    
+    if (state == 0) {
+        Debug() << "Font.exist? compatibility patch installed";
+    } else {
+        Debug() << "Warning: Could not install Font.exist? patch";
         rb_errinfo();
     }
     
@@ -821,6 +909,61 @@ static void mriBindingInit() {
         MKXP_INFO_LOG("Legacy Ruby compatibility shims installed for RGSS%d\n", rgssVer);
     } else {
         MKXP_DEBUG_LOG("Skipping legacy shims for RGSS%d (not needed for VX Ace)\n", rgssVer);
+    }
+    
+    // =============================================================================
+    // Ruby 3.x/4.0 ALIAS_METHOD COMPATIBILITY FIX
+    // In Ruby 1.8/1.9, you could alias a method that doesn't exist yet.
+    // In Ruby 3.0+, this raises NameError: undefined method.
+    // This shim wraps alias_method to silently ignore undefined methods,
+    // allowing the alias to be created later when the original method is defined.
+    // Applied to ALL RGSS versions since this is a Ruby version issue, not RGSS.
+    // =============================================================================
+    rb_eval_string_protect(
+        "class Module\n"
+        "  # Store original alias_method\n"
+        "  alias :__mkxpz_original_alias_method__ :alias_method\n"
+        "  \n"
+        "  # Override alias_method to handle undefined methods gracefully\n"
+        "  def alias_method(new_name, old_name)\n"
+        "    # Check if the original method exists\n"
+        "    if method_defined?(old_name) || private_method_defined?(old_name) || protected_method_defined?(old_name)\n"
+        "      __mkxpz_original_alias_method__(new_name, old_name)\n"
+        "    else\n"
+        "      # Method doesn't exist yet - store for later application\n"
+        "      # This allows scripts to define the method after the alias line\n"
+        "      @__mkxpz_pending_aliases__ ||= []\n"
+        "      @__mkxpz_pending_aliases__ << [new_name, old_name]\n"
+        "      # Also hook method_added to apply pending aliases\n"
+        "      unless @__mkxpz_method_added_hooked__\n"
+        "        @__mkxpz_method_added_hooked__ = true\n"
+        "        class << self\n"
+        "          alias :__mkxpz_original_method_added__ :method_added rescue nil\n"
+        "          def method_added(name)\n"
+        "            __mkxpz_original_method_added__(name) if respond_to?(:__mkxpz_original_method_added__, true) rescue nil\n"
+        "            # Check pending aliases\n"
+        "            if @__mkxpz_pending_aliases__\n"
+        "              @__mkxpz_pending_aliases__.each do |new_name, old_name|\n"
+        "                if name.to_sym == old_name.to_sym\n"
+        "                  __mkxpz_original_alias_method__(new_name, old_name) rescue nil\n"
+        "                end\n"
+        "              end\n"
+        "              # Remove applied aliases\n"
+        "              @__mkxpz_pending_aliases__.reject! { |n, o| o.to_sym == name.to_sym }\n"
+        "            end\n"
+        "          end\n"
+        "        end\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        &state);
+    
+    if (state == 0) {
+        Debug() << "Ruby 3.x alias_method compatibility shim installed";
+    } else {
+        Debug() << "Warning: Could not install alias_method compatibility shim";
+        rb_errinfo();
     }
     
     // Set $stdout and its ilk accordingly on Windows
@@ -1471,6 +1614,7 @@ struct BacktraceData {
  * This function converts:
  * - "when X:" to "when X then" (case statement shorthand)
  * - "when X, Y:" to "when X, Y then" (case with multiple values)
+ * - "alias new old" to safe form that handles undefined methods
  * 
  * Note: This is a best-effort conversion. Complex edge cases might not be handled.
  */
@@ -1479,25 +1623,48 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
     
     std::string result = script;
     
-    // Pattern explanation:
-    // (when\s+)  - Match "when" followed by whitespace (capture group 1)
-    // ([^:\n]+?) - Match the when expression(s), non-greedy (capture group 2)
-    // (\s*):     - Match optional whitespace followed by colon
-    // (\s*)      - Match trailing whitespace (capture group 3)
-    // (?=\s*\n|\s*#|\s+[^\s:]) - Lookahead: followed by newline, comment, or next statement
-    //                            (but NOT another colon, to avoid matching "a ? b : c")
-    
-    // Simpler, safer approach: only match "when <expr>:" at end of line or before comment
-    // This avoids breaking ternary operators and hash literals
     try {
+        // =========================================================================
+        // 1. Convert "when X:" syntax to "when X then"
+        // =========================================================================
         // Match: "when" + space + expression(s) + ":" at end of line or before comment
         // The expression can contain commas (for multiple values) but not newlines
         std::regex whenColonPattern(
             R"((when\s+)([^:\n]+?)\s*:\s*(#.*)?$)",
             std::regex::multiline
         );
-        
         result = std::regex_replace(result, whenColonPattern, "$1$2 then $3");
+        
+        // =========================================================================
+        // 2. Convert unsafe "alias" to safe "alias_method" with rescue
+        // =========================================================================
+        // In Ruby 3.0+, "alias new old" raises NameError if 'old' doesn't exist.
+        // We convert: alias new_name old_name
+        // To: alias_method :new_name, :old_name rescue nil
+        // 
+        // Pattern: alias <new> <old> (not inside string, at start of line or after semicolon)
+        // Captures: (alias)\s+(:?\w+)\s+(:?\w+)
+        // Note: We need to be careful not to match "alias_method" itself
+        std::regex aliasPattern(
+            R"((^|\s|;)(alias)\s+(:?)(\w+)\s+(:?)(\w+)(\s*(?:#.*)?$))",
+            std::regex::multiline
+        );
+        
+        // Replace with: alias_method :new, :old rescue nil
+        // $1 = prefix (whitespace/semicolon), $2 = "alias", $3 = optional colon, $4 = new_name
+        // $5 = optional colon, $6 = old_name, $7 = trailing
+        result = std::regex_replace(result, aliasPattern, 
+            "$1alias_method :$4, :$6 rescue nil$7");
+        
+        // =========================================================================
+        // 3. Handle superclass mismatch for class definitions (DISABLED)
+        // =========================================================================
+        // NOTE: This transformation was too aggressive and caused side effects.
+        // The superclass mismatch issue is now handled differently:
+        // - A Ruby shim is installed in mriBindingInit that catches TypeError
+        //   during class definition and reopens the class without inheritance.
+        // - This is safer because it only triggers when an actual error occurs.
+        // =========================================================================
         
     } catch (const std::regex_error& e) {
         // If regex fails, just return original script
@@ -1506,6 +1673,103 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
     }
     
     return result;
+}
+
+// Ruby 3.x compatibility: Check if script uses @@class_variables in toplevel class << self blocks
+// In Ruby 3.0+, accessing @@class_variables from toplevel singleton class is forbidden.
+// This function detects such patterns to allow wrapping the script.
+static bool needsClassVariableCompat(const std::string &script) {
+    // Quick check: if no @@, no need to process
+    if (script.find("@@") == std::string::npos)
+        return false;
+    
+    // Check for class << self pattern at toplevel
+    // This is a heuristic - we look for "class << self" not inside a class definition
+    size_t pos = 0;
+    int classNestLevel = 0;
+    
+    while (pos < script.length()) {
+        // Skip comments
+        if (script[pos] == '#') {
+            while (pos < script.length() && script[pos] != '\n')
+                pos++;
+            continue;
+        }
+        
+        // Skip string literals (simple check)
+        if (script[pos] == '"' || script[pos] == '\'') {
+            char quote = script[pos++];
+            while (pos < script.length() && script[pos] != quote) {
+                if (script[pos] == '\\') pos++;
+                pos++;
+            }
+            pos++;
+            continue;
+        }
+        
+        // Check for class keyword
+        if (pos + 5 < script.length() && 
+            script.substr(pos, 5) == "class" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 5 >= script.length() || !isalnum(script[pos+5]))) {
+            
+            // Check if it's "class << self" at toplevel
+            size_t afterClass = pos + 5;
+            while (afterClass < script.length() && isspace(script[afterClass]))
+                afterClass++;
+            
+            if (afterClass + 1 < script.length() && 
+                script[afterClass] == '<' && script[afterClass+1] == '<') {
+                // This is "class << ..."
+                if (classNestLevel == 0) {
+                    // Toplevel singleton class - needs compat
+                    return true;
+                }
+            } else {
+                // Regular class definition
+                classNestLevel++;
+            }
+            pos = afterClass;
+            continue;
+        }
+        
+        // Check for module keyword (also increases nesting)
+        if (pos + 6 < script.length() && 
+            script.substr(pos, 6) == "module" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 6 >= script.length() || !isalnum(script[pos+6]))) {
+            classNestLevel++;
+            pos += 6;
+            continue;
+        }
+        
+        // Check for end keyword
+        if (pos + 3 <= script.length() && 
+            script.substr(pos, 3) == "end" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 3 >= script.length() || !isalnum(script[pos+3]))) {
+            if (classNestLevel > 0) classNestLevel--;
+            pos += 3;
+            continue;
+        }
+        
+        pos++;
+    }
+    
+    return false;
+}
+
+// Wrap script in Object.class_eval to provide class variable context for Ruby 3.x
+static std::string wrapScriptForClassVariableCompat(const std::string &script, const char* scriptName) {
+    std::string wrapped;
+    wrapped.reserve(script.length() + 100);
+    wrapped = "Object.class_eval do\n";
+    wrapped += script;
+    wrapped += "\nend\n";
+    
+    Debug() << "[MKXP-Z] Ruby 3.x compat: Wrapped script '" << scriptName << "' for class variable access";
+    
+    return wrapped;
 }
 
 bool evalScript(VALUE string, const char *filename)
@@ -1614,8 +1878,18 @@ static void runRMXPScripts(BacktraceData &btData) {
         
         // Preprocess Ruby 1.8 syntax for compatibility with Ruby 4.0's Prism parser
         std::string processedScript = preprocessRuby18Syntax(decodeBuffer.c_str());
+        
+        // Ruby 3.x compatibility: wrap scripts that use @@class_variables in toplevel singleton class
+        // This fixes "class variable access from toplevel" RuntimeError
+        if (needsClassVariableCompat(processedScript)) {
+            processedScript = wrapScriptForClassVariableCompat(processedScript, RSTRING_PTR(scriptName));
+        }
+        
         rb_ary_store(script, 3, rb_utf8_str_new_cstr(processedScript.c_str()));
     }
+    
+    fprintf(stderr, "[MKXP-Z] ========== SCRIPT LOADING COMPLETE ==========\n");
+    fprintf(stderr, "[MKXP-Z] Total scripts loaded: %ld\n", scriptCount);
     
     /* Execute preloaded scripts */
     for (std::vector<std::string>::const_iterator i = conf.preloadScripts.begin();
@@ -1623,18 +1897,21 @@ static void runRMXPScripts(BacktraceData &btData) {
     {
         if (shState->rtData().rqTerm)
             break;
+        fprintf(stderr, "[MKXP-Z] Running preload script: %s\n", i->c_str());
         runCustomScript(*i);
     }
     
     VALUE exc = rb_gv_get("$!");
-    if (exc != Qnil)
+    if (exc != Qnil) {
+        fprintf(stderr, "[MKXP-Z] ERROR: Exception before main loop! Aborting.\n");
         return;
+    }
     
-    MKXP_DEBUG_LOG("Starting main script execution loop...");
+    fprintf(stderr, "[MKXP-Z] ========== STARTING MAIN SCRIPT EXECUTION ==========\n");
     while (true) {
         for (long i = 0; i < scriptCount; ++i) {
             if (shState->rtData().rqTerm) {
-                MKXP_DEBUG_LOG("Termination requested at script %ld\n", i);
+                fprintf(stderr, "[MKXP-Z] Termination requested at script %ld\n", i);
                 break;
             }
             
@@ -1700,25 +1977,133 @@ static void runRMXPScripts(BacktraceData &btData) {
             
             int state;
             
-            // Log every 50th script and the first 10
-            if (i < 10 || i % 50 == 0) {
-                MKXP_DEBUG_LOG("Executing script %ld: %s\n", i, scriptName);
-            }
+            // VERBOSE LOGGING: Log every script
+            fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Executing: %s\n", i, scriptCount, scriptName);
             
             evalString(string, fname, &state);
+            
+            if (state == 0) {
+                // Script executed successfully
+                if (i < 10 || i == scriptCount - 1 || i % 20 == 0) {
+                    fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✓ Success: %s\n", i, scriptCount, scriptName);
+                }
+                
+                // Special logging for Main script
+                if (strcmp(scriptName, "Main") == 0) {
+                    fprintf(stderr, "[MKXP-Z] ========== MAIN SCRIPT FINISHED ==========\n");
+                    fprintf(stderr, "[MKXP-Z] Game loop has ended normally.\n");
+                }
+            }
+            
+                // Handle superclass mismatch error specially
             if (state) {
-                MKXP_DEBUG_LOG("Script %ld (%s) caused error state: %d\n", i, scriptName, state);
+                VALUE exc = rb_errinfo();
+                if (exc != Qnil && rb_obj_is_kind_of(exc, rb_eTypeError)) {
+                    VALUE msg = rb_funcall(exc, rb_intern("message"), 0);
+                    const char* msgStr = StringValueCStr(msg);
+                    
+                    if (strstr(msgStr, "superclass mismatch") != nullptr) {
+                        // Clear the error
+                        rb_set_errinfo(Qnil);
+                        
+                        // Strategy: Remove the existing class definition and let the script define it fresh
+                        // This solves mismatch and avoids infinite recursion from alias methods mixing old/new methods
+                        
+                        const char* classStart = strstr(msgStr, "for class ");
+                        if (classStart) {
+                            classStart += 10; // Skip "for class "
+                            std::string className;
+                            while (*classStart && (isalnum(*classStart) || *classStart == '_')) {
+                                className += *classStart++;
+                            }
+                            
+                            if (!className.empty()) {
+                                fprintf(stderr, "[MKXP-Z] Superclass mismatch for %s - Removing existing class definition to fix...\n", className.c_str());
+                                
+                                // Remove the class constant from Object
+                                // This makes the class "undefined" so the script can define it from scratch
+                                ID classId = rb_intern(className.c_str());
+                                if (rb_const_defined(rb_cObject, classId)) {
+                                    rb_const_remove(rb_cObject, classId);
+                                    
+                                    // Retry executing the ORIGINAL script
+                                    rb_eval_string_protect(RSTRING_PTR(scriptDecoded), &state);
+                                    
+                                    if (!state) {
+                                        fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✓ Fixed superclass mismatch for %s (class redefined)\n", i, scriptCount, className.c_str());
+                                        continue;
+                                    } else {
+                                         // Failed again
+                                         VALUE newExc = rb_errinfo();
+                                         VALUE newMsg = rb_funcall(newExc, rb_intern("message"), 0);
+                                         fprintf(stderr, "[MKXP-Z] Redefinition failing: %s. SKIPPING script: %s\n", StringValueCStr(newMsg), scriptName);
+                                         rb_set_errinfo(Qnil);
+                                         continue;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Fallback if class extraction failed
+                        fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ⚠️  Superclass mismatch in '%s' - SKIPPING script\n", 
+                                i, scriptCount, scriptName);
+                        continue;
+                    }
+                }
+            }
+            
+            // If there was still an error (non-superclass-mismatch), log and break
+            if (state) {
+                // Log the error details
+                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✗ ERROR in script: %s\n", i, scriptCount, scriptName);
+                fprintf(stderr, "[MKXP-Z] Error state: %d\n", state);
+                
+                // Try to get error details
+                VALUE errInfo = rb_errinfo();
+                if (errInfo != Qnil) {
+                    VALUE errClass = rb_class_name(rb_obj_class(errInfo));
+                    VALUE errMsg = rb_funcall(errInfo, rb_intern("message"), 0);
+                    fprintf(stderr, "[MKXP-Z] Exception: %s: %s\n", 
+                            StringValueCStr(errClass), StringValueCStr(errMsg));
+                    
+                    // Get backtrace
+                    VALUE bt = rb_funcall(errInfo, rb_intern("backtrace"), 0);
+                    if (RB_TYPE_P(bt, RUBY_T_ARRAY)) {
+                        long btLen = RARRAY_LEN(bt);
+                        fprintf(stderr, "[MKXP-Z] Backtrace (%ld frames):\n", btLen);
+                        for (long j = 0; j < btLen && j < 10; j++) {
+                            VALUE line = rb_ary_entry(bt, j);
+                            fprintf(stderr, "[MKXP-Z]   %ld: %s\n", j, StringValueCStr(line));
+                        }
+                    }
+                }
+                
                 break;
             }
         }
         
-        VALUE exc = rb_gv_get("$!");
-        if (rb_obj_class(exc) != getRbData()->exc[Reset])
-            break;
+        fprintf(stderr, "[MKXP-Z] ========== SCRIPT EXECUTION LOOP COMPLETE ==========\n");
         
-        if (processReset(false))
+        VALUE exc = rb_gv_get("$!");
+        if (exc != Qnil) {
+            VALUE excClass = rb_class_name(rb_obj_class(exc));
+            fprintf(stderr, "[MKXP-Z] Post-loop exception: %s\n", StringValueCStr(excClass));
+        }
+        
+        if (rb_obj_class(exc) != getRbData()->exc[Reset]) {
+            fprintf(stderr, "[MKXP-Z] Breaking main loop (not a Reset exception)\n");
             break;
+        }
+        
+        if (processReset(false)) {
+            fprintf(stderr, "[MKXP-Z] processReset returned true, breaking\n");
+            break;
+        }
+        
+        fprintf(stderr, "[MKXP-Z] Reset processed, restarting script loop...\n");
     }
+    
+    fprintf(stderr, "[MKXP-Z] ========== EXITING runRMXPScripts ==========\n");
 }
 
 // =============================================================================

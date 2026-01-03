@@ -934,6 +934,106 @@ struct BacktraceData {
     BoostHash<std::string, std::string> scriptNames;
 };
 
+// Ruby 3.x compatibility: Preprocess scripts that use @@class_variables
+// in toplevel class << self blocks. This is forbidden in Ruby 3.0+.
+// We wrap such scripts in Object.class_eval to provide a proper class context.
+#if RAPI_MAJOR >= 3
+static bool needsClassVariableCompat(const std::string &script) {
+    // Quick check: if no @@, no need to process
+    if (script.find("@@") == std::string::npos)
+        return false;
+    
+    // Check for class << self pattern at toplevel
+    // This is a heuristic - we look for "class << self" not inside a class definition
+    size_t pos = 0;
+    int classNestLevel = 0;
+    
+    while (pos < script.length()) {
+        // Skip comments
+        if (script[pos] == '#') {
+            while (pos < script.length() && script[pos] != '\n')
+                pos++;
+            continue;
+        }
+        
+        // Skip string literals (simple check)
+        if (script[pos] == '"' || script[pos] == '\'') {
+            char quote = script[pos++];
+            while (pos < script.length() && script[pos] != quote) {
+                if (script[pos] == '\\') pos++;
+                pos++;
+            }
+            pos++;
+            continue;
+        }
+        
+        // Check for class keyword
+        if (pos + 5 < script.length() && 
+            script.substr(pos, 5) == "class" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 5 >= script.length() || !isalnum(script[pos+5]))) {
+            
+            // Check if it's "class << self" at toplevel
+            size_t afterClass = pos + 5;
+            while (afterClass < script.length() && isspace(script[afterClass]))
+                afterClass++;
+            
+            if (afterClass + 1 < script.length() && 
+                script[afterClass] == '<' && script[afterClass+1] == '<') {
+                // This is "class << ..."
+                if (classNestLevel == 0) {
+                    // Toplevel singleton class - needs compat
+                    return true;
+                }
+            } else {
+                // Regular class definition
+                classNestLevel++;
+            }
+            pos = afterClass;
+            continue;
+        }
+        
+        // Check for module keyword (also increases nesting)
+        if (pos + 6 < script.length() && 
+            script.substr(pos, 6) == "module" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 6 >= script.length() || !isalnum(script[pos+6]))) {
+            classNestLevel++;
+            pos += 6;
+            continue;
+        }
+        
+        // Check for end keyword
+        if (pos + 3 <= script.length() && 
+            script.substr(pos, 3) == "end" &&
+            (pos == 0 || !isalnum(script[pos-1])) &&
+            (pos + 3 >= script.length() || !isalnum(script[pos+3]))) {
+            if (classNestLevel > 0) classNestLevel--;
+            pos += 3;
+            continue;
+        }
+        
+        pos++;
+    }
+    
+    return false;
+}
+
+static std::string wrapScriptForClassVariableCompat(const std::string &script, const char* scriptName) {
+    // Wrap the script in Object.class_eval to provide class variable context
+    // This allows @@class_variables to work in singleton class blocks
+    std::string wrapped;
+    wrapped.reserve(script.length() + 100);
+    wrapped = "Object.class_eval do\n";
+    wrapped += script;
+    wrapped += "\nend\n";
+    
+    Debug() << "[MKXP-Z] Ruby 3.x compat: Wrapped script '" << scriptName << "' for class variable access";
+    
+    return wrapped;
+}
+#endif
+
 bool evalScript(VALUE string, const char *filename)
 {
     int state;
@@ -1023,7 +1123,18 @@ static void runRMXPScripts(BacktraceData &btData) {
             break;
         }
         
+        // Ruby 3.x compatibility: wrap scripts that use @@class_variables in toplevel singleton class
+#if RAPI_MAJOR >= 3
+        std::string decodedScript(decodeBuffer.c_str(), bufferLen);
+        if (needsClassVariableCompat(decodedScript)) {
+            std::string wrappedScript = wrapScriptForClassVariableCompat(decodedScript, RSTRING_PTR(scriptName));
+            rb_ary_store(script, 3, rb_utf8_str_new_cstr(wrappedScript.c_str()));
+        } else {
+            rb_ary_store(script, 3, rb_utf8_str_new_cstr(decodeBuffer.c_str()));
+        }
+#else
         rb_ary_store(script, 3, rb_utf8_str_new_cstr(decodeBuffer.c_str()));
+#endif
     }
     
     /* Execute preloaded scripts */
