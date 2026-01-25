@@ -1667,7 +1667,7 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
         // $1 = prefix (whitespace/semicolon), $2 = "alias", $3 = optional colon, $4 = new_name
         // $5 = optional colon, $6 = old_name, $7 = trailing
         result = std::regex_replace(result, aliasPattern, 
-            "$1alias_method :$4, :$6 rescue nil$7");
+            "$1alias_method :$4, :$6 unless method_defined?(:$4) || private_method_defined?(:$4) rescue nil$7");
         
         // =========================================================================
         // 3. Handle superclass mismatch for class definitions (DISABLED)
