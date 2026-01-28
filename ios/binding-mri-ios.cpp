@@ -506,7 +506,7 @@ static void mriBindingInit() {
         "  # Core RGSS methods\n"
         "  PRIVATE_METHODS_TO_FIX = [:dispose, :disposed?, :update, :refresh, :terminate, :create, :contents,\n"
         "    # Pokemon Essentials methods (defined via module_function, which makes them private in Ruby 3+)\n"
-        "    :pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay,\n"
+        "    :pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay, :getPlaceInGame,\n"
         "    :pbConfirmMessage, :pbConfirmMessageSerious, :pbShowCommandsBlack, :pbShowCommandsBorde]\n"
         "  \n"
         "  def self.included(base)\n"
@@ -547,7 +547,7 @@ static void mriBindingInit() {
         // This is safe because we only target methods that ARE defined and ARE private
         "module Kernel\n"
         "  class << self\n"
-        "    [:pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay,\n"
+        "    [:pbShowCommands, :pbShowCommandsWithHelp, :pbMessage, :pbMessageDisplay, :getPlaceInGame,\n"
         "     :pbConfirmMessage, :pbConfirmMessageSerious, :pbShowCommandsBlack, :pbShowCommandsBorde,\n"
         "     :pbChooseNumber, :pbChoosePokemon, :pbChooseNonEggPokemon, :pbChooseAblePokemon].each do |m|\n"
         "      public m if private_method_defined?(m) rescue nil\n"
@@ -801,7 +801,7 @@ static void mriBindingInit() {
         "      __mkxpz_original_throw(tag, value)\n"
         "    rescue UncaughtThrowError => e\n"
         "      # List of internal symbols used by games that should be silently ignored\n"
-        "      internal_symbols = [:__mkxpz_break__, :break, :__break__]\n"
+        "      internal_symbols = [:__mkxpz_break__, :break, :__break__, :__mkxpz_loop_break__]\n"
         "      raise unless internal_symbols.include?(tag)\n"
         "      # Return nil for silently caught throws\n"
         "      nil\n"
@@ -1798,6 +1798,282 @@ static std::string wrapScriptForClassVariableCompat(const std::string &script, c
     return wrapped;
 }
 
+// =========================================================================
+// Ruby 4.0 Prism Parser Compatibility: Fix "Invalid break" syntax errors
+// =========================================================================
+// Some legacy RPG Maker scripts have "break" statements inside conditional
+// blocks within loops. Ruby 4.0's Prism parser is stricter and may not
+// recognize the loop context when parsing individual scripts.
+// 
+// This fix wraps scripts containing standalone "break" in a loop context
+// by replacing "break" with "throw(:__mkxpz_break__)" and wrapping the
+// entire loop blocks with catch(:__mkxpz_break__).
+//
+// 'break' is valid in:
+// - loop, while, until, for
+// - Blocks passed to iterators (each, map, times, etc.)
+// - **Procs created with lambda**
+//
+// This fix specifically targets scripts known to have this issue.
+// =========================================================================
+
+// List of scripts known to have "Invalid break" issues
+static const std::vector<std::string> scriptsNeedingBreakFix = {
+    "PokemonNotebook",
+    "Connect/Register/Login/Deuks",
+    // Add more script names here as discovered
+};
+
+static bool needsBreakSyntaxFix(const std::string &script, const std::string &scriptName) {
+    // Quick check: if no "break", no need to process
+    if (script.find("break") == std::string::npos)
+        return false;
+    
+    // Check if this script is in the known list
+    for (const auto& knownScript : scriptsNeedingBreakFix) {
+        if (scriptName.find(knownScript) != std::string::npos) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Wrap "break" statements in a way that makes them valid in Ruby 4.0
+// Strategy: Replace standalone "break" with "return nil" since the script
+// functions are typically called in a loop context and early return is safe.
+static std::string fixBreakSyntax(const std::string &script, const char* scriptName) {
+    std::string result = script;
+    
+    // We need to be careful to only replace "break" that is:
+    // 1. A standalone keyword (not part of another word)
+    // 2. Likely inside an if/elsif/else block within a loop
+    
+    // For these specific scripts, we'll wrap the entire "loop do" blocks
+    // with catch/throw to make break valid.
+    
+    // Strategy: Find all "loop do" and wrap them with catch(:__mkxpz_break__)
+    // Then replace "break" with "throw(:__mkxpz_break__)"
+    
+    // First, let's try a simpler approach: Replace "break" with "return nil"
+    // This works because the break is usually meant to exit a method or block
+    
+    // More precise: Wrap the script's main loop in a lambda
+    // Find patterns like "loop do" and wrap with "catch(:__brk__) { loop do ... end }"
+    
+    // For now, let's use regex to replace standalone "break" with "(throw :__mkxpz_loop_break__)"
+    // and wrap any "loop do" with "catch(:__mkxpz_loop_break__) do loop do"
+    
+    try {
+        // Step 1: Find matching "end" for loop do (simplified - just add closing brace after)
+        // This is tricky... let's try a different approach
+
+        // This is tricky... let's try a different approach
+        
+        // Alternative: Just replace standalone "break" with "throw(:__mkxpz_loop_break__)"
+        // and wrap the entire script in a catch block
+        std::regex breakPattern(R"(\bbreak\b(?!\s*\())");
+        
+        // Check if we actually need to modify anything
+        if (std::regex_search(result, breakPattern)) {
+            // Replace break with throw
+            result = std::regex_replace(result, breakPattern, "throw(:__mkxpz_loop_break__)");
+            
+            Debug() << "[MKXP-Z] SYNTAX FIX: Wrapped 'break' statements in script '" << scriptName << "' with throw(:__mkxpz_loop_break__)";
+        }
+    } catch (const std::regex_error& e) {
+        Debug() << "[MKXP-Z] Break syntax fix regex error: " << e.what();
+        return script;
+    }
+    
+    return result;
+}
+
+// If the script has throw(:__mkxpz_loop_break__), we need to wrap loop blocks
+static std::string wrapLoopsWithCatch(const std::string &script, const char* scriptName) {
+    if (script.find("throw(:__mkxpz_loop_break__)") == std::string::npos) {
+        return script;
+    }
+    
+    std::string result = script;
+    size_t pos = 0;
+    int modifications = 0;
+    
+    // Find all "loop do" or "loop {" patterns and wrap them
+    while (pos < result.length()) {
+        // Look for "loop" keyword
+        size_t loopPos = result.find("loop", pos);
+        if (loopPos == std::string::npos) break;
+        
+        // Verify it's a standalone keyword
+        if (loopPos > 0 && (isalnum(result[loopPos - 1]) || result[loopPos - 1] == '_')) {
+            pos = loopPos + 4;
+            continue;
+        }
+        
+        // Check what follows "loop"
+        size_t afterLoop = loopPos + 4;
+        while (afterLoop < result.length() && isspace((unsigned char)result[afterLoop]))
+            afterLoop++;
+        
+        if (afterLoop >= result.length()) break;
+        
+        bool isLoopDo = (result.substr(afterLoop, 2) == "do");
+        bool isLoopBrace = (result[afterLoop] == '{');
+        
+        if (isLoopDo || isLoopBrace) {
+            // Insert "catch(:__mkxpz_loop_break__) do " before "loop"
+            // We use do...end instead of {...} to avoid precedence confusion
+            std::string catchPrefix = "catch(:__mkxpz_loop_break__) do ";
+            result.insert(loopPos, catchPrefix);
+            
+            // Re-calculate positions after insertion
+            loopPos += catchPrefix.length();
+            
+            // Skip to after "do" or "{" to start searching for the end
+            size_t blockStart = loopPos + 4; // "loop"
+            while (blockStart < result.length() && isspace((unsigned char)result[blockStart]))
+                blockStart++;
+            
+            if (isLoopDo) {
+                blockStart += 2; // skip "do"
+            } else {
+                blockStart += 1; // skip "{"
+            }
+            
+            // Find matching end/}
+            int depth = 1;
+            size_t endPos = blockStart;
+            
+            while (endPos < result.length() && depth > 0) {
+                // Skip strings
+                if (result[endPos] == '"' || result[endPos] == '\'') {
+                    char quote = result[endPos++];
+                    while (endPos < result.length() && result[endPos] != quote) {
+                        if (result[endPos] == '\\') endPos++; // Skip escape
+                        endPos++;
+                    }
+                    if (endPos < result.length()) endPos++;
+                    continue;
+                }
+                
+                // Skip comments
+                if (result[endPos] == '#') {
+                    while (endPos < result.length() && result[endPos] != '\n')
+                        endPos++;
+                    continue;
+                }
+                
+                // Skip regex literals /pattern/
+                // This is hard to parse perfectly without a full parser, but we can try basic heuristics
+                // For now, let's skip it to avoid complexity, assuming code is well-formatted
+                
+                // Check for nested blocks
+                if (isLoopDo) {
+                    // Check for end
+                    if (result.substr(endPos, 3) == "end" && 
+                        (endPos + 3 >= result.length() || !isalnum(result[endPos + 3])) &&
+                        (endPos == 0 || !isalnum(result[endPos - 1]))) {
+                        depth--;
+                        if (depth == 0) {
+                            // Found the matching end
+                            // Insert " end" after this "end"
+                            result.insert(endPos + 3, " end");
+                            modifications++;
+                            break;
+                        }
+                        endPos += 3;
+                        continue;
+                    }
+                    
+                    // Check for block starters: do, def, class, module, case, begin, if, unless, while, until, for
+                    bool startsBlock = false;
+                    size_t wordLen = 0;
+                    
+                    if (result.substr(endPos, 2) == "do" && (endPos + 2 >= result.length() || !isalnum(result[endPos + 2]))) {
+                        startsBlock = true; wordLen = 2;
+                    } 
+                    else if (result.substr(endPos, 3) == "def" && (endPos + 3 >= result.length() || !isalnum(result[endPos + 3]))) {
+                        startsBlock = true; wordLen = 3;
+                    }
+                    else if ((result.substr(endPos, 5) == "class" || result.substr(endPos, 5) == "begin" || result.substr(endPos, 5) == "while" || result.substr(endPos, 5) == "until") && 
+                             (endPos + 5 >= result.length() || !isalnum(result[endPos + 5]))) {
+                        startsBlock = true; wordLen = 5;
+                    }
+                    else if ((result.substr(endPos, 6) == "module" || result.substr(endPos, 6) == "unless") && 
+                             (endPos + 6 >= result.length() || !isalnum(result[endPos + 6]))) {
+                        startsBlock = true; wordLen = 6;
+                    }
+                    else if ((result.substr(endPos, 4) == "case") && 
+                             (endPos + 4 >= result.length() || !isalnum(result[endPos + 4]))) {
+                        startsBlock = true; wordLen = 4;
+                    }
+                    else if (result.substr(endPos, 2) == "if" && (endPos + 2 >= result.length() || !isalnum(result[endPos + 2]))) {
+                        startsBlock = true; wordLen = 2;
+                    }
+                    else if (result.substr(endPos, 3) == "for" && (endPos + 3 >= result.length() || !isalnum(result[endPos + 3]))) {
+                        startsBlock = true; wordLen = 3;
+                    }
+                    
+                    if (startsBlock) {
+                        // Check previous char to avoid part of word
+                        if (endPos > 0 && (isalnum(result[endPos - 1]) || result[endPos - 1] == '_')) {
+                            endPos += wordLen;
+                            continue;
+                        }
+                        
+                        // Modifier check for if, unless, while, until
+                        // If it's a modifier (e.g. "x = 1 if y"), it doesn't start a block
+                        // Heuristic: Check if preceded by newline or semicolon (ignoring whitespace)
+                        bool isModifier = false;
+                        if (wordLen == 2 /*if*/ || wordLen == 6 /*unless*/ || wordLen == 5 /*while/until*/) {
+                            size_t checkPos = endPos - 1;
+                            while (checkPos > 0 && (result[checkPos] == ' ' || result[checkPos] == '\t'))
+                                checkPos--;
+                            
+                            // If the previous significant char is NOT \n or ;, it's likely a modifier
+                            if (checkPos > 0 && result[checkPos] != '\n' && result[checkPos] != ';') {
+                                // One exception: "then if" or "else if" (elsif is separate keyword)
+                                // But simple heuristic: if preceded by non-structure char, it's modifier
+                                isModifier = true;
+                            }
+                        }
+                        
+                        if (!isModifier) {
+                            depth++;
+                        }
+                        endPos += wordLen;
+                        continue;
+                    }
+                } else {
+                    // Brace matching for loop { }
+                    if (result[endPos] == '{') depth++;
+                    else if (result[endPos] == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            result.insert(endPos + 1, " end"); // Close the catch do block
+                            modifications++;
+                            break;
+                        }
+                    }
+                }
+                
+                endPos++;
+            }
+            
+            pos = endPos + 4; // Continue after the inserted " end"
+        } else {
+            pos = afterLoop;
+        }
+    }
+    
+    if (modifications > 0) {
+        Debug() << "[MKXP-Z] SYNTAX FIX: Wrapped " << modifications << " loop blocks with catch(:__mkxpz_loop_break__) in script '" << scriptName << "'";
+    }
+    
+    return result;
+}
+
 // Ruby 1.8 -> 3.x compatibility: Fix "retry if condition" syntax
 // In Ruby 1.8, retry could be used inside loops (while, until, loop do).
 // In Ruby 3.x, retry is ONLY valid inside begin...rescue...end blocks.
@@ -1859,6 +2135,33 @@ bool evalScript(VALUE string, const char *filename)
     evalString(string, rb_utf8_str_new_cstr(filename), &state);
     if (state) return false;
     return true;
+}
+
+static std::string fixSpecificScriptErrors(const std::string &script, const char* scriptName) {
+    std::string result = script;
+    std::string sName = scriptName;
+
+    // Pokemon Insurgence Fix: Connect/Register/Login/Deuks double 'end' syntax error
+    // Error: SyntaxError: 189:Connect/Register/Login/Deuks:959: syntax error found
+    // 957 |     pbSave
+    // 958 |   end
+    // 959 | end
+    if (sName.find("Connect/Register/Login/Deuks") != std::string::npos) {
+        try {
+            // Match: pbSave followed by whitespace/newlines, then 'end', whitespace, 'end'
+            // We want to replace it with just one 'end' (and pbSave)
+            std::regex pattern(R"(pbSave\s+end\s+end)");
+            if (std::regex_search(result, pattern)) {
+                // Formatting: pbSave + newline + indent + end
+                result = std::regex_replace(result, pattern, "pbSave\r\n    end");
+                Debug() << "[MKXP-Z] SYNTAX FIX: Fixed double 'end' syntax error in script '" << scriptName << "'";
+            }
+        } catch (const std::regex_error& e) {
+            Debug() << "[MKXP-Z] Specific syntax fix regex error: " << e.what();
+        }
+    }
+
+    return result;
 }
 
 
@@ -1993,6 +2296,22 @@ static void runRMXPScripts(BacktraceData &btData) {
                  }
              }
         }
+        
+        // =========================================================================
+        // Break Syntax Fix for Ruby 4.0 Prism Parser (script-specific)
+        // =========================================================================
+        // Fix "Invalid break" syntax errors in known problematic scripts.
+        // This replaces standalone "break" with "throw(:__mkxpz_loop_break__)" and
+        // wraps "loop do" blocks with "catch(:__mkxpz_loop_break__)".
+        if (needsBreakSyntaxFix(processedScript, sName)) {
+            processedScript = fixBreakSyntax(processedScript, RSTRING_PTR(scriptName));
+            processedScript = wrapLoopsWithCatch(processedScript, RSTRING_PTR(scriptName));
+        }
+        
+
+
+        // Apply specific internal syntax fixes (e.g. for Pokemon Insurgence)
+        processedScript = fixSpecificScriptErrors(processedScript, RSTRING_PTR(scriptName));
         
         rb_ary_store(script, 3, rb_utf8_str_new_cstr(processedScript.c_str()));
     }

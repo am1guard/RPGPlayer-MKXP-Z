@@ -573,6 +573,9 @@ static elementsN(buttonCodes);
 void inputBindingInit() {
     VALUE module = rb_define_module("Input");
     
+    // DEBUG LOG: Check address of keyStates to compare with App side
+    fprintf(stderr, "[MKXP-Z] 🔑 Lib Input Init - keyStates Address: %p\n", (void*)EventThread::keyStates);
+    
     _rb_define_module_function(module, "delta", inputDelta);
     _rb_define_module_function(module, "update", inputUpdate);
     _rb_define_module_function(module, "press?", inputPress);
