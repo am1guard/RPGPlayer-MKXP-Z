@@ -988,7 +988,22 @@ static void mriBindingInit() {
 }
 
 static void showMsg(const std::string &msg) {
+#if defined(IOS_PLATFORM) || defined(__IPHONEOS__)
+    // iOS: Don't use EventThread.showMessageBox() - it causes deadlock!
+    // iOS doesn't run EventThread.process() loop, so pushing SDL events
+    // to show message boxes will hang forever waiting for processing.
+    // Instead, log the error and store it in rgssErrorMsg for Swift to display.
+    fprintf(stderr, "[MKXP-Z] showMsg: %s\n", msg.c_str());
+    
+    // Store error in threadData for Swift crash handler to pick up
+    if (shState) {
+        shState->rtData().rgssErrorMsg = msg;
+        // Request termination so Swift knows the game has stopped
+        shState->rtData().rqTermAck.set();
+    }
+#else
     shState->eThread().showMessageBox(msg.c_str());
+#endif
 }
 
 static void printP(int argc, VALUE *argv, const char *convMethod,
@@ -1638,15 +1653,43 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
     
     try {
         // =========================================================================
-        // 1. Convert "when X:" syntax to "when X then"
+        // 1. Convert "when X:" syntax to "when X then" (Ruby 1.8 -> 3.x)
         // =========================================================================
-        // Match: "when" + space + expression(s) + ":" at end of line or before comment
-        // The expression can contain commas (for multiple values) but not newlines
-        std::regex whenColonPattern(
-            R"((when\s+)([^:\n]+?)\s*:\s*(#.*)?$)",
+        // Ruby 1.8 allowed "when X:" syntax, but Ruby 3.x requires "when X then" or "when X;"
+        // 
+        // Case A: "when X:" at end of line (possibly with comment)
+        //         e.g., "when 1:" or "when 'foo': # comment"
+        // Case B: "when X:" followed by code on same line  
+        //         e.g., "when 3: next getID(PBTypes,:DRAGON)"
+        //
+        // We need to be careful not to match symbolic literals like ":DRAGON"
+        // The key insight: after "when", the first ":" that is NOT preceded by 
+        // a comma/space (symbol context) is the case delimiter.
+        //
+        // Strategy: Match "when" + simple literals (numbers, strings, symbols) + ":"
+        // Simple case: when followed by a number/identifier, then ":"
+        std::regex whenColonPatternSimple(
+            R"((when\s+)(\d+)\s*:\s*)",
             std::regex::multiline
         );
-        result = std::regex_replace(result, whenColonPattern, "$1$2 then $3");
+        result = std::regex_replace(result, whenColonPatternSimple, "$1$2 then ");
+        
+        // Also handle quoted strings and symbols in when clauses
+        // Pattern: when 'string': or when "string": or when :symbol:
+        std::regex whenColonPatternQuoted(
+            R"((when\s+)('[^']*'|"[^"]*")\s*:\s*)",
+            std::regex::multiline
+        );
+        result = std::regex_replace(result, whenColonPatternQuoted, "$1$2 then ");
+        
+        // Handle multiple values: when 1, 2, 3:
+        // This is tricky because we need to find the LAST colon after the when clause
+        // Pattern: when <value>(, <value>)*:
+        std::regex whenColonPatternMulti(
+            R"((when\s+)(\d+(?:\s*,\s*\d+)*)\s*:\s*)",
+            std::regex::multiline  
+        );
+        result = std::regex_replace(result, whenColonPatternMulti, "$1$2 then ");
         
         // =========================================================================
         // 2. Convert unsafe "alias" to safe "alias_method" with rescue
@@ -1663,11 +1706,27 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
             std::regex::multiline
         );
         
-        // Replace with: alias_method :new, :old rescue nil
+        // Replace with: alias_method :new, :old unless method_defined?(:new) rescue nil
         // $1 = prefix (whitespace/semicolon), $2 = "alias", $3 = optional colon, $4 = new_name
         // $5 = optional colon, $6 = old_name, $7 = trailing
+        // 
+        // IMPORTANT: We ADD "unless method_defined?" check to PREVENT recursion!
+        // 
+        // Problem scenario without check:
+        // 1. Plugin loads: alias oldInit initialize  -> oldInit = original
+        //    def initialize calls oldInit (OK)
+        // 2. Plugin loads AGAIN (duplicate loading): alias oldInit initialize -> oldInit = PATCHED!
+        //    def initialize calls oldInit which calls initialize = INFINITE LOOP!
+        // 
+        // With "unless method_defined?" check:
+        // 1. First load: oldInit undefined, alias created -> oldInit = original
+        // 2. Second load: oldInit ALREADY defined, alias SKIPPED!
+        //    oldInit still points to original = NO RECURSION!
+        // 
+        // This fixes "SystemStackError: stack level too deep" in games like Pokemon Anil
+        // where plugins like "[Advanced Items - Field Moves]" create alias chains.
         result = std::regex_replace(result, aliasPattern, 
-            "$1alias_method :$4, :$6 unless method_defined?(:$4) || private_method_defined?(:$4) rescue nil$7");
+            "$1alias_method :$4, :$6 unless method_defined?(:$4) rescue nil$7");
         
         // =========================================================================
         // 3. Handle superclass mismatch for class definitions (DISABLED)
@@ -2424,35 +2483,85 @@ static void runRMXPScripts(BacktraceData &btData) {
 if Object.const_defined?(:Win32API)
   puts "[MKXP-Z] Patching Win32API for GetAsyncKeyState/GetKeyState..."
   
-  # Windows VK to SDL Scancode mapping
+  # Windows VK to SDL Scancode mapping (comprehensive)
   $__mkxpz_vk_to_sdl = {
-    0x0D => 0x28,  # VK_RETURN -> SDL_SCANCODE_RETURN
-    0x1B => 0x29,  # VK_ESCAPE -> SDL_SCANCODE_ESCAPE
-    0x20 => 0x2C,  # VK_SPACE -> SDL_SCANCODE_SPACE
-    0x08 => 0x2A,  # VK_BACK -> SDL_SCANCODE_BACKSPACE
-    0x09 => 0x2B,  # VK_TAB -> SDL_SCANCODE_TAB
-    0x25 => 0x50,  # VK_LEFT -> SDL_SCANCODE_LEFT
-    0x26 => 0x52,  # VK_UP -> SDL_SCANCODE_UP
-    0x27 => 0x4F,  # VK_RIGHT -> SDL_SCANCODE_RIGHT
-    0x28 => 0x51,  # VK_DOWN -> SDL_SCANCODE_DOWN
-    0x10 => -10,   # VK_SHIFT -> combined LSHIFT/RSHIFT
-    0xA0 => 0xE1,  # VK_LSHIFT
-    0xA1 => 0xE5,  # VK_RSHIFT
-    0x11 => -11,   # VK_CONTROL -> combined LCTRL/RCTRL
-    0xA2 => 0xE0,  # VK_LCONTROL
-    0xA3 => 0xE4,  # VK_RCONTROL
-    0x12 => -12,   # VK_MENU -> combined LALT/RALT
-    0xA4 => 0xE2,  # VK_LMENU
-    0xA5 => 0xE6,  # VK_RMENU
+    0x0D => 40,   # VK_RETURN -> SDL_SCANCODE_RETURN (0x28)
+    0x1B => 41,   # VK_ESCAPE -> SDL_SCANCODE_ESCAPE (0x29)
+    0x20 => 44,   # VK_SPACE -> SDL_SCANCODE_SPACE (0x2C)
+    0x08 => 42,   # VK_BACK -> SDL_SCANCODE_BACKSPACE (0x2A)
+    0x09 => 43,   # VK_TAB -> SDL_SCANCODE_TAB (0x2B)
+    0x25 => 80,   # VK_LEFT -> SDL_SCANCODE_LEFT (0x50)
+    0x26 => 82,   # VK_UP -> SDL_SCANCODE_UP (0x52)
+    0x27 => 79,   # VK_RIGHT -> SDL_SCANCODE_RIGHT (0x4F)
+    0x28 => 81,   # VK_DOWN -> SDL_SCANCODE_DOWN (0x51)
+    0x10 => -10,  # VK_SHIFT -> combined LSHIFT/RSHIFT
+    0xA0 => 225,  # VK_LSHIFT -> SDL_SCANCODE_LSHIFT (0xE1)
+    0xA1 => 229,  # VK_RSHIFT -> SDL_SCANCODE_RSHIFT (0xE5)
+    0x11 => -11,  # VK_CONTROL -> combined LCTRL/RCTRL
+    0xA2 => 224,  # VK_LCONTROL -> SDL_SCANCODE_LCTRL (0xE0)
+    0xA3 => 228,  # VK_RCONTROL -> SDL_SCANCODE_RCTRL (0xE4)
+    0x12 => -12,  # VK_MENU -> combined LALT/RALT
+    0xA4 => 226,  # VK_LMENU -> SDL_SCANCODE_LALT (0xE2)
+    0xA5 => 230,  # VK_RMENU -> SDL_SCANCODE_RALT (0xE6)
   }
   
-  # Add A-Z (VK 0x41-0x5A -> SDL 0x04-0x1D)
-  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x41 + 0x04 }
-  # Add 0-9 (VK 0x30-0x39 -> SDL 0x27, 0x1E-0x26)
-  $__mkxpz_vk_to_sdl[0x30] = 0x27  # 0
-  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x31 + 0x1E }
-  # Add F1-F12 (VK 0x70-0x7B -> SDL 0x3A-0x45)
-  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 0x3A }
+  # Add A-Z (VK 0x41-0x5A -> SDL_SCANCODE_A-Z = 4-29)
+  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x41 + 4 }
+  # Add 0-9 (VK 0x30-0x39 -> SDL_SCANCODE_0=39, SDL_SCANCODE_1-9=30-38)
+  $__mkxpz_vk_to_sdl[0x30] = 39  # 0 -> SDL_SCANCODE_0
+  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x31 + 30 }
+  # Add F1-F12 (VK 0x70-0x7B -> SDL_SCANCODE_F1-F12 = 58-69)
+  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 58 }
+  
+  # Define global Proc for checking key state (avoids scope issues with define_method)
+  $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
+    begin
+      states = Input.raw_key_states rescue nil
+      return 0 unless states
+      
+      sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
+      
+      pressed = false
+      if sdl_scan
+        if sdl_scan == -10  # Combined Shift
+          pressed = (states[225] rescue false) || (states[229] rescue false)
+        elsif sdl_scan == -11  # Combined Control
+          pressed = (states[224] rescue false) || (states[228] rescue false)
+        elsif sdl_scan == -12  # Combined Alt
+          pressed = (states[226] rescue false) || (states[230] rescue false)
+        else
+          pressed = states[sdl_scan] rescue false
+        end
+      end
+      
+      # ALIASES for iOS Virtual Gamepad Interop:
+      # Games often check Z/X keys (0x5A/0x58) but the virtual gamepad 
+      # might behave as Return/Escape or vice versa.
+      unless pressed
+        # If Game checks VK_Z (0x5A) -> Also check Enter (40) and Space (44)
+        if vk_code == 0x5A
+          pressed = (states[40] rescue false) || (states[44] rescue false)
+        # If Game checks VK_X (0x58) -> Also check Escape (41)
+        elsif vk_code == 0x58
+          pressed = (states[41] rescue false)
+        # If Game checks VK_RETURN (0x0D) -> Also check Z (29) and Space (44)
+        elsif vk_code == 0x0D
+            pressed = (states[29] rescue false) || (states[44] rescue false)
+        # If Game checks VK_ESCAPE (0x1B) -> Also check X (27)
+        elsif vk_code == 0x1B
+            pressed = (states[27] rescue false)
+        # If Game checks VK_C (0x43) -> Check Enter(40), Z(29), Space(44)
+        elsif vk_code == 0x43
+          pressed = (states[40] rescue false) || (states[29] rescue false) || (states[44] rescue false)
+        end
+      end
+      
+      return pressed ? 1 : 0
+    rescue => e
+      puts "[MKXP-Z] Key state check error: #{e.message}"
+      return 0
+    end
+  end
   
   begin
     win32api_class = Object.const_get(:Win32API)
@@ -2461,58 +2570,37 @@ if Object.const_defined?(:Win32API)
     if win32api_class.instance_methods.include?(:call)
       original_call = win32api_class.instance_method(:call)
       
-      # Define helper to check key state
-      define_method(:__mkxpz_check_keystate) do |vk_code|
-        begin
-          states = Input.raw_key_states rescue nil
-          return 0 unless states
+      # Patch the call method - using class_eval to access define_method safely if private
+      win32api_class.class_eval do
+        define_method(:call) do |*args|
+          func_lower = (@func || @function || '').to_s.downcase
+          dll_lower = (@dll || @dllname || '').to_s.downcase
           
-          sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
-          return 0 unless sdl_scan
-          
-          pressed = false
-          if sdl_scan == -10  # Combined Shift
-            pressed = (states[0xE1] rescue false) || (states[0xE5] rescue false)
-          elsif sdl_scan == -11  # Combined Control
-            pressed = (states[0xE0] rescue false) || (states[0xE4] rescue false)
-          elsif sdl_scan == -12  # Combined Alt
-            pressed = (states[0xE2] rescue false) || (states[0xE6] rescue false)
-          else
-            pressed = states[sdl_scan] rescue false
+          if dll_lower.include?('user32')
+            if func_lower == 'getasynckeystate'
+              vk_code = args[0].to_i rescue 0
+              result = $__mkxpz_check_keystate_proc.call(vk_code)
+              return result == 1 ? 0x8000 : 0
+            elsif func_lower == 'getkeystate'
+              vk_code = args[0].to_i rescue 0
+              result = $__mkxpz_check_keystate_proc.call(vk_code)
+              # Fix: GetKeyState also returns high-order bit for pressed status
+              return result == 1 ? 0x8000 : 0
+            end
           end
           
-          return pressed ? 1 : 0
-        rescue => e
-          return 0
+          # Call original for other functions
+          original_call.bind(self).call(*args)
         end
       end
       
-      # Patch the call method
-      win32api_class.define_method(:call) do |*args|
-        func_lower = (@func || @function || '').to_s.downcase
-        dll_lower = (@dll || @dllname || '').to_s.downcase
-        
-        if dll_lower.include?('user32')
-          if func_lower == 'getasynckeystate'
-            vk_code = args[0].to_i rescue 0
-            result = __mkxpz_check_keystate(vk_code)
-            return result == 1 ? 0x8000 : 0
-          elsif func_lower == 'getkeystate'
-            vk_code = args[0].to_i rescue 0
-            return __mkxpz_check_keystate(vk_code)
-          end
-        end
-        
-        # Call original for other functions
-        original_call.bind(self).call(*args)
-      end
-      
-      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState (Input.raw_key_states)"
+      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState (global Proc + Aliases)"
     else
       puts "[MKXP-Z] Win32API has no 'call' method to patch"
     end
   rescue => e
     puts "[MKXP-Z] Warning: Could not patch Win32API: #{e.message}"
+    puts e.backtrace.first(3).join("\n")
   end
 else
   puts "[MKXP-Z] Win32API class not defined, skipping patch"
@@ -2562,40 +2650,87 @@ end
                 }
                 
                 if (should_patch) {
-                    const char* win32apiPatch = R"(
+                    const char* win32apiPatch = R"RUBY(
 # Win32API GetAsyncKeyState/GetKeyState Postload Patch
 if Object.const_defined?(:Win32API)
   puts "[MKXP-Z] Patching Win32API for GetAsyncKeyState/GetKeyState..."
   
-  # Windows VK to SDL Scancode mapping
+  # Windows VK to SDL Scancode mapping (comprehensive)
   $__mkxpz_vk_to_sdl = {
-    0x0D => 0x28,  # VK_RETURN -> SDL_SCANCODE_RETURN
-    0x1B => 0x29,  # VK_ESCAPE -> SDL_SCANCODE_ESCAPE
-    0x20 => 0x2C,  # VK_SPACE -> SDL_SCANCODE_SPACE
-    0x08 => 0x2A,  # VK_BACK -> SDL_SCANCODE_BACKSPACE
-    0x09 => 0x2B,  # VK_TAB -> SDL_SCANCODE_TAB
-    0x25 => 0x50,  # VK_LEFT -> SDL_SCANCODE_LEFT
-    0x26 => 0x52,  # VK_UP -> SDL_SCANCODE_UP
-    0x27 => 0x4F,  # VK_RIGHT -> SDL_SCANCODE_RIGHT
-    0x28 => 0x51,  # VK_DOWN -> SDL_SCANCODE_DOWN
-    0x10 => -10,   # VK_SHIFT -> combined LSHIFT/RSHIFT
-    0xA0 => 0xE1,  # VK_LSHIFT
-    0xA1 => 0xE5,  # VK_RSHIFT
-    0x11 => -11,   # VK_CONTROL -> combined LCTRL/RCTRL
-    0xA2 => 0xE0,  # VK_LCONTROL
-    0xA3 => 0xE4,  # VK_RCONTROL
-    0x12 => -12,   # VK_MENU -> combined LALT/RALT
-    0xA4 => 0xE2,  # VK_LMENU
-    0xA5 => 0xE6,  # VK_RMENU
+    0x0D => 40,   # VK_RETURN -> SDL_SCANCODE_RETURN
+    0x1B => 41,   # VK_ESCAPE -> SDL_SCANCODE_ESCAPE
+    0x20 => 44,   # VK_SPACE -> SDL_SCANCODE_SPACE
+    0x08 => 42,   # VK_BACK -> SDL_SCANCODE_BACKSPACE
+    0x09 => 43,   # VK_TAB -> SDL_SCANCODE_TAB
+    0x25 => 80,   # VK_LEFT -> SDL_SCANCODE_LEFT
+    0x26 => 82,   # VK_UP -> SDL_SCANCODE_UP
+    0x27 => 79,   # VK_RIGHT -> SDL_SCANCODE_RIGHT
+    0x28 => 81,   # VK_DOWN -> SDL_SCANCODE_DOWN
+    0x10 => -10,  # VK_SHIFT -> combined LSHIFT/RSHIFT
+    0xA0 => 225,  # VK_LSHIFT -> SDL_SCANCODE_LSHIFT
+    0xA1 => 229,  # VK_RSHIFT -> SDL_SCANCODE_RSHIFT
+    0x11 => -11,  # VK_CONTROL -> combined LCTRL/RCTRL
+    0xA2 => 224,  # VK_LCONTROL -> SDL_SCANCODE_LCTRL
+    0xA3 => 228,  # VK_RCONTROL -> SDL_SCANCODE_RCTRL
+    0x12 => -12,  # VK_MENU -> combined LALT/RALT
+    0xA4 => 226,  # VK_LMENU -> SDL_SCANCODE_LALT
+    0xA5 => 230,  # VK_RMENU -> SDL_SCANCODE_RALT
   }
   
-  # Add A-Z (VK 0x41-0x5A -> SDL 0x04-0x1D)
-  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x41 + 0x04 }
-  # Add 0-9 (VK 0x30-0x39 -> SDL 0x27, 0x1E-0x26)
-  $__mkxpz_vk_to_sdl[0x30] = 0x27  # 0
-  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x31 + 0x1E }
-  # Add F1-F12 (VK 0x70-0x7B -> SDL 0x3A-0x45)
-  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 0x3A }
+  # Add A-Z (VK 0x41-0x5A -> SDL_SCANCODE_A-Z = 4-29)
+  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x41 + 4 }
+  # Add 0-9 (VK 0x30-0x39 -> SDL_SCANCODE_0=39, SDL_SCANCODE_1-9=30-38)
+  $__mkxpz_vk_to_sdl[0x30] = 39  # 0 -> SDL_SCANCODE_0
+  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x31 + 30 }
+  # Add F1-F12 (VK 0x70-0x7B -> SDL_SCANCODE_F1-F12 = 58-69)
+  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 58 }
+  
+  # Define global Proc for checking key state (avoids scope issues with define_method)
+  $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
+    begin
+      states = Input.raw_key_states rescue nil
+      return 0 unless states
+      
+      sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
+      
+      pressed = false
+      if sdl_scan
+        if sdl_scan == -10  # Combined Shift
+          pressed = (states[225] rescue false) || (states[229] rescue false)
+        elsif sdl_scan == -11  # Combined Control
+          pressed = (states[224] rescue false) || (states[228] rescue false)
+        elsif sdl_scan == -12  # Combined Alt
+          pressed = (states[226] rescue false) || (states[230] rescue false)
+        else
+          pressed = states[sdl_scan] rescue false
+        end
+      end
+      
+      # ALIASES for iOS Virtual Gamepad Interop:
+      unless pressed
+        # If Game checks VK_Z (0x5A) -> Also check Enter (40) and Space (44)
+        if vk_code == 0x5A
+          pressed = (states[40] rescue false) || (states[44] rescue false)
+        # If Game checks VK_X (0x58) -> Also check Escape (41)
+        elsif vk_code == 0x58
+          pressed = (states[41] rescue false)
+        # If Game checks VK_RETURN (0x0D) -> Also check Z (29) and Space (44)
+        elsif vk_code == 0x0D
+            pressed = (states[29] rescue false) || (states[44] rescue false)
+        # If Game checks VK_ESCAPE (0x1B) -> Also check X (27)
+        elsif vk_code == 0x1B
+            pressed = (states[27] rescue false)
+        # If Game checks VK_C (0x43) -> Check Enter(40), Z(29), Space(44)
+        elsif vk_code == 0x43
+          pressed = (states[40] rescue false) || (states[29] rescue false) || (states[44] rescue false)
+        end
+      end
+      
+      return pressed ? 1 : 0
+    rescue
+      return 0
+    end
+  end
   
   begin
     win32api_class = Object.const_get(:Win32API)
@@ -2603,52 +2738,34 @@ if Object.const_defined?(:Win32API)
     if win32api_class.instance_methods.include?(:call)
       original_call = win32api_class.instance_method(:call)
       
-      define_method(:__mkxpz_check_keystate) do |vk_code|
-        begin
-          states = Input.raw_key_states rescue nil
-          return 0 unless states
-          sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
-          return 0 unless sdl_scan
+      # Patch the call method - using class_eval to access define_method safely
+      win32api_class.class_eval do
+        define_method(:call) do |*args|
+          func_lower = (@func || @function || '').to_s.downcase
+          dll_lower = (@dll || @dllname || '').to_s.downcase
           
-          pressed = false
-          if sdl_scan == -10
-            pressed = (states[0xE1] rescue false) || (states[0xE5] rescue false)
-          elsif sdl_scan == -11
-            pressed = (states[0xE0] rescue false) || (states[0xE4] rescue false)
-          elsif sdl_scan == -12
-            pressed = (states[0xE2] rescue false) || (states[0xE6] rescue false)
-          else
-            pressed = states[sdl_scan] rescue false
+          if dll_lower.include?('user32')
+            if func_lower == 'getasynckeystate'
+              vk_code = args[0].to_i rescue 0
+              result = $__mkxpz_check_keystate_proc.call(vk_code)
+              return result == 1 ? 0x8000 : 0
+            elsif func_lower == 'getkeystate'
+              vk_code = args[0].to_i rescue 0
+              result = $__mkxpz_check_keystate_proc.call(vk_code)
+              # Fix: GetKeyState also returns high-order bit for pressed status
+              return result == 1 ? 0x8000 : 0
+            end
           end
-          return pressed ? 1 : 0
-        rescue
-          return 0
+          original_call.bind(self).call(*args)
         end
       end
-      
-      win32api_class.define_method(:call) do |*args|
-        func_lower = (@func || @function || '').to_s.downcase
-        dll_lower = (@dll || @dllname || '').to_s.downcase
-        
-        if dll_lower.include?('user32')
-          if func_lower == 'getasynckeystate'
-            vk_code = args[0].to_i rescue 0
-            result = __mkxpz_check_keystate(vk_code)
-            return result == 1 ? 0x8000 : 0
-          elsif func_lower == 'getkeystate'
-            vk_code = args[0].to_i rescue 0
-            return __mkxpz_check_keystate(vk_code)
-          end
-        end
-        original_call.bind(self).call(*args)
-      end
-      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState"
+      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState (global Proc + Aliases)"
     end
   rescue => e
     puts "[MKXP-Z] Warning: Could not patch Win32API: #{e.message}"
   end
 end
-)";
+)RUBY";
                     int patchState;
                     rb_eval_string_protect(win32apiPatch, &patchState);
                     if (!patchState) {
