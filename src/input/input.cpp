@@ -513,27 +513,16 @@ struct KbBinding : public Binding
     
     bool sourceActive() const
     {
-        bool result = false;
-        
         /* Special case aliases */
-        if (source == SDL_SCANCODE_LSHIFT) {
-            result = EventThread::keyStates[source]
-                || EventThread::keyStates[SDL_SCANCODE_RSHIFT];
-        } else if (source == SDL_SCANCODE_RETURN) {
-            result = EventThread::keyStates[source]
-                || EventThread::keyStates[SDL_SCANCODE_KP_ENTER];
-            // DEBUG: Log Enter key check
-            static int debugCounter = 0;
-            if (++debugCounter % 60 == 0) {
-                fprintf(stderr, "[MKXP-Z-BINDING] sourceActive(RETURN): keyStates[%d]=%d, keyStates[KP_ENTER]=%d, result=%d, ptr=%p\n",
-                        source, EventThread::keyStates[source], EventThread::keyStates[SDL_SCANCODE_KP_ENTER], 
-                        result, (void*)EventThread::keyStates);
-            }
-        } else {
-            result = EventThread::keyStates[source];
-        }
+        if (source == SDL_SCANCODE_LSHIFT)
+            return EventThread::keyStates[source]
+            || EventThread::keyStates[SDL_SCANCODE_RSHIFT];
         
-        return result;
+        if (source == SDL_SCANCODE_RETURN)
+            return EventThread::keyStates[source]
+            || EventThread::keyStates[SDL_SCANCODE_KP_ENTER];
+        
+        return EventThread::keyStates[source];
     }
     
     bool sourceRepeatable() const
@@ -769,10 +758,7 @@ struct InputPrivate
         initMsBindings();
         
         /* Main thread should have these posted by now */
-        fprintf(stderr, "[MKXP-Z-INPUT] InputPrivate constructor: Checking for binding update...\n");
         checkBindingChange(rtData);
-        fprintf(stderr, "[MKXP-Z-INPUT] After checkBindingChange: kbBindings=%zu, bindings=%zu\n", 
-                kbBindings.size(), bindings.size());
         
         int fps = rtData.config.fixedFramerate;
         if (!fps) fps = (rgssVer >= 2) ? 60 : 40;
@@ -919,36 +905,10 @@ struct InputPrivate
     {
         BDescVec d;
         
-        if (!rtData.bindingUpdateMsg.poll(d)) {
-            // DEBUG: Log when no binding update is available
-            static int pollFailCount = 0;
-            if (++pollFailCount == 1 || pollFailCount % 300 == 0) {
-                fprintf(stderr, "[MKXP-Z-INPUT] checkBindingChange: No binding update available (count=%d, bindings.size=%zu)\n", 
-                        pollFailCount, bindings.size());
-            }
-            
-            // iOS FIX: If this is the first poll and we have no bindings yet,
-            // generate default bindings directly instead of waiting for message
-            #if defined(IOS_PLATFORM) || defined(__APPLE__)
-            if (pollFailCount == 1 && kbBindings.empty()) {
-                fprintf(stderr, "[MKXP-Z-INPUT] iOS: First poll failed and no bindings - generating defaults directly\n");
-                d = loadBindings(rtData.config);
-                fprintf(stderr, "[MKXP-Z-INPUT] iOS: loadBindings returned %zu descriptors\n", d.size());
-                if (!d.empty()) {
-                    applyBindingDesc(d);
-                    fprintf(stderr, "[MKXP-Z-INPUT] iOS: ✅ Default bindings applied! kbBindings=%zu, bindings=%zu\n", 
-                            kbBindings.size(), bindings.size());
-                }
-            }
-            #endif
-            
+        if (!rtData.bindingUpdateMsg.poll(d))
             return;
-        }
         
-        fprintf(stderr, "[MKXP-Z-INPUT] ✅ Received binding update! %zu descriptors\n", d.size());
         applyBindingDesc(d);
-        fprintf(stderr, "[MKXP-Z-INPUT] ✅ Bindings applied. kbBindings=%zu, bindings.size=%zu\n", 
-                kbBindings.size(), bindings.size());
     }
     
     template<class B>
@@ -1587,17 +1547,4 @@ const char *Input::getButtonName(SDL_GameControllerButton button) {
 Input::~Input()
 {
     delete p;
-}
-
-// =============================================================================
-// iOS Key State Debug - Export the keyStates pointer from input.cpp
-// =============================================================================
-// This helps diagnose if input.cpp sees a different EventThread::keyStates
-// than input-binding.cpp (static linkage issue)
-extern "C" {
-    uint8_t* mkxpz_get_keystates_ptr_from_input(void) {
-        fprintf(stderr, "[MKXP-Z] 🔑 mkxpz_get_keystates_ptr_from_input called, returning: %p\n", 
-                (void*)EventThread::keyStates);
-        return EventThread::keyStates;
-    }
 }

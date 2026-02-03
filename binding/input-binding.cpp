@@ -660,16 +660,3 @@ void inputBindingInit() {
         }
     }
 }
-// =============================================================================
-// iOS Key State Access - Export the real keyStates pointer
-// =============================================================================
-// This allows the iOS app (mkxpz_ios_api.mm) to access the ACTUAL keyStates
-// array used by the Input module, avoiding static variable linkage issues
-// between different compilation units.
-extern "C" {
-    uint8_t* mkxpz_get_keystates_ptr(void) {
-        fprintf(stderr, "[MKXP-Z] 🔑 mkxpz_get_keystates_ptr called, returning: %p\n", 
-                (void*)EventThread::keyStates);
-        return EventThread::keyStates;
-    }
-}

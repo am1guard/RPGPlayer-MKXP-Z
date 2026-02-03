@@ -2545,244 +2545,6 @@ static void runRMXPScripts(BacktraceData &btData) {
         return;
     }
     
-    // ================================================================
-    // EARLY WIN32API STUB - Defined BEFORE game scripts run!
-    // This ensures our mock is in place when Pokemon fangames try to use Win32API
-    // ================================================================
-    fprintf(stderr, "[MKXP-Z] Injecting early Win32API stub class...\n");
-    
-    const char* earlyWin32APIStub = R"RUBY(
-# Early Win32API Stub - Loaded BEFORE game scripts
-# This provides a mock Win32API class that intercepts GetAsyncKeyState/GetKeyState
-# for Pokemon fangames that bypass RGSS Input system
-
-# VK to SDL Scancode mapping (global for reuse)
-$__mkxpz_vk_to_sdl ||= {
-  0x01 => -1, 0x02 => -2, 0x04 => -3,
-  0x0D => 40, 0x1B => 41, 0x20 => 44, 0x08 => 42, 0x09 => 43,
-  0x25 => 80, 0x26 => 82, 0x27 => 79, 0x28 => 81,
-  0x10 => -10, 0xA0 => 225, 0xA1 => 229,
-  0x11 => -11, 0xA2 => 224, 0xA3 => 228,
-  0x12 => -12, 0xA4 => 226, 0xA5 => 230,
-}
-(0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x41 + 4 }
-$__mkxpz_vk_to_sdl[0x30] ||= 39
-(0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x31 + 30 }
-(0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x70 + 58 }
-
-# Keystate checker proc - uses live_key_states for instant detection
-$__mkxpz_check_keystate_proc ||= lambda do |vk_code|
-  begin
-    states = Input.live_key_states rescue (Input.raw_key_states rescue nil)
-    return 0 unless states
-    
-    sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
-    pressed = false
-    
-    if sdl_scan == -1
-      pressed = Input.press?(Input::MOUSELEFT) rescue false
-    elsif sdl_scan == -2
-      pressed = Input.press?(Input::MOUSERIGHT) rescue false
-    elsif sdl_scan == -3
-      pressed = Input.press?(Input::MOUSEMIDDLE) rescue false
-    elsif sdl_scan == -10
-      pressed = (states[225] rescue false) || (states[229] rescue false)
-    elsif sdl_scan == -11
-      pressed = (states[224] rescue false) || (states[228] rescue false)
-    elsif sdl_scan == -12
-      pressed = (states[226] rescue false) || (states[230] rescue false)
-    elsif sdl_scan
-      pressed = states[sdl_scan] rescue false
-    end
-    
-    # Aliases for virtual gamepad compatibility
-    unless pressed
-      case vk_code
-      when 0x5A, 0x43, 0x0D, 0x20 # Z, C, Enter, Space = Confirm
-        pressed = (states[40] || states[44] || states[29] || states[6]) rescue false
-      when 0x58, 0x1B, 0x08 # X, Escape, Backspace = Cancel
-        pressed = (states[41] || states[27]) rescue false
-      end
-    end
-    
-    pressed ? 1 : 0
-  rescue
-    0
-  end
-end
-
-# Define Win32API class if not already defined
-unless Object.const_defined?(:Win32API)
-  class Win32API
-    attr_reader :dll, :func, :import, :export
-    
-    def initialize(dll, func, import = "", export = "")
-      @dll = dll.to_s
-      @func = func.to_s
-      @import = import
-      @export = export
-      @__mkxpz_dll = @dll
-      @__mkxpz_func = @func
-    end
-    
-    def call(*args)
-      dll_lower = @dll.to_s.downcase
-      func_lower = @func.to_s.downcase
-      
-      if dll_lower.include?('user32')
-        if func_lower == 'getasynckeystate'
-          vk = args[0].to_i rescue 0
-          return $__mkxpz_check_keystate_proc.call(vk) == 1 ? 0x8000 : 0
-        elsif func_lower == 'getkeystate'
-          vk = args[0].to_i rescue 0
-          return $__mkxpz_check_keystate_proc.call(vk) == 1 ? 0x8000 : 0
-        elsif func_lower == 'getkeyboardstate'
-          lpKeyState = args[0]
-          if lpKeyState.is_a?(String) && lpKeyState.bytesize >= 256
-            256.times do |vk|
-              result = $__mkxpz_check_keystate_proc.call(vk) rescue 0
-              lpKeyState[vk] = (result == 1 ? 0x80 : 0).chr
-            end
-            return 1
-          end
-          return 0
-        elsif func_lower == 'findwindow' || func_lower == 'findwindowa' || func_lower == 'findwindoww'
-          return 0x12345678  # Fake window handle for RGSS Player detection
-        elsif func_lower == 'getcursorpos'
-          # Return mouse position
-          if args[0].is_a?(String) && args[0].length >= 8
-            x = Input.mouse_x rescue 0
-            y = Input.mouse_y rescue 0
-            args[0][0, 4] = [x].pack('l')
-            args[0][4, 4] = [y].pack('l')
-          end
-          return 1
-        elsif func_lower == 'screentoclient'
-          return 1  # Success, coords already in client space on iOS
-        elsif func_lower == 'showcursor'
-          return 1
-        elsif func_lower == 'setcursorpos'
-          return 1
-        end
-      elsif dll_lower.include?('kernel32')
-        if func_lower == 'getprivateprofilestring'
-          return 0
-        elsif func_lower == 'writeprivateprofilestring'
-          return 1
-        elsif func_lower == 'getmodulehandle'
-          return 0x10000000
-        end
-      elsif dll_lower.include?('xinput')
-        # Xbox controller API - return no controller connected
-        if func_lower == 'xinputgetstate'
-          return 1167  # ERROR_DEVICE_NOT_CONNECTED
-        end
-      end
-      
-      # Default: return 0 for unknown functions
-      0
-    end
-    
-    alias_method :Call, :call
-    alias_method :[], :call
-  end
-  puts "[MKXP-Z] [EARLY] Win32API stub class defined with GetAsyncKeyState mock"
-end
-
-# Also define Fiddle stubs for games that use DL/Fiddle
-module Fiddle
-  SIZEOF_VOIDP = 8
-  SIZEOF_CHAR = 1
-  SIZEOF_SHORT = 2
-  SIZEOF_INT = 4
-  SIZEOF_LONG = 8
-  
-  TYPE_VOID = 0
-  TYPE_VOIDP = 1
-  TYPE_CHAR = 2
-  TYPE_SHORT = 3
-  TYPE_INT = 4
-  TYPE_LONG = 5
-  
-  class Pointer
-    def initialize(addr = 0)
-      @address = addr.to_i
-      @data = "\0" * 256
-    end
-    
-    def to_i
-      @address
-    end
-    
-    def [](offset, length = 1)
-      @data[offset, length] rescue "\0" * length
-    end
-    
-    def []=(offset, length = nil, value)
-      if length
-        @data[offset, length] = value.to_s
-      else
-        @data[offset] = value.to_s
-      end
-    end
-    
-    def self.malloc(size)
-      new(0)
-    end
-    
-    def free
-    end
-  end
-  
-  class Handle
-    def initialize(lib)
-      @lib = lib.to_s
-    end
-    
-    def [](sym)
-      0  # Return null pointer for any symbol
-    end
-    
-    def close
-    end
-  end
-  
-  class Function
-    def initialize(ptr, args, ret_type)
-      @ptr = ptr
-    end
-    
-    def call(*args)
-      0
-    end
-  end
-  
-  def self.dlopen(lib)
-    Handle.new(lib)
-  end
-  
-  def self.malloc(size)
-    Pointer.malloc(size)
-  end
-end unless defined?(Fiddle)
-
-puts "[MKXP-Z] [EARLY] Fiddle module stub defined"
-)RUBY";
-    
-    int earlyStubState;
-    rb_eval_string_protect(earlyWin32APIStub, &earlyStubState);
-    if (earlyStubState) {
-        fprintf(stderr, "[MKXP-Z] WARNING: Early Win32API stub failed to load!\n");
-        VALUE earlyExc = rb_errinfo();
-        if (earlyExc != Qnil) {
-            VALUE earlyMsg = rb_funcall(earlyExc, rb_intern("message"), 0);
-            fprintf(stderr, "[MKXP-Z] Error: %s\n", StringValueCStr(earlyMsg));
-            rb_set_errinfo(Qnil);  // Clear the error
-        }
-    } else {
-        fprintf(stderr, "[MKXP-Z] Early Win32API stub loaded successfully\n");
-    }
-    
     fprintf(stderr, "[MKXP-Z] ========== STARTING MAIN SCRIPT EXECUTION ==========\n");
     while (true) {
         for (long i = 0; i < scriptCount; ++i) {
@@ -2858,33 +2620,22 @@ puts "[MKXP-Z] [EARLY] Fiddle module stub defined"
             
             // ================================================================
             // WIN32API POSTLOAD PATCH - Run before Main script
-            // This patches GetAsyncKeyState/GetKeyState to use Input.live_key_states
+            // This patches GetAsyncKeyState/GetKeyState to use Input.raw_key_states
             // which allows virtual gamepad input to be detected by games using Win32 API
-            // CRITICAL: Use live_key_states (direct EventThread::keyStates) instead of
-            // raw_key_states (buffered copy) for instant input detection!
             // ================================================================
             if (strcmp(scriptName, "Main") == 0) {
                 fprintf(stderr, "[MKXP-Z] Applying Win32API GetAsyncKeyState postload patch...\n");
                 
                 const char* win32apiPatch = R"RUBY(
 # Win32API GetAsyncKeyState/GetKeyState Postload Patch
-# Patches the game's Win32API class to use Input.live_key_states
+# Patches the game's Win32API class to use Input.raw_key_states
 # for proper virtual gamepad support on iOS
-# CRITICAL FIX: Use live_key_states (direct EventThread::keyStates access)
-# instead of raw_key_states (buffered copy that only updates on Input.update)
 
 if Object.const_defined?(:Win32API)
   puts "[MKXP-Z] Patching Win32API for GetAsyncKeyState/GetKeyState..."
   
   # Windows VK to SDL Scancode mapping (comprehensive)
-  # FIXED: Added mouse button mappings for games that check mouse via Win32API
   $__mkxpz_vk_to_sdl = {
-    # Mouse buttons - mapped to negative values for special handling
-    0x01 => -1,   # VK_LBUTTON -> Mouse Left
-    0x02 => -2,   # VK_RBUTTON -> Mouse Right
-    0x04 => -3,   # VK_MBUTTON -> Mouse Middle
-    
-    # Standard keys
     0x0D => 40,   # VK_RETURN -> SDL_SCANCODE_RETURN (0x28)
     0x1B => 41,   # VK_ESCAPE -> SDL_SCANCODE_ESCAPE (0x29)
     0x20 => 44,   # VK_SPACE -> SDL_SCANCODE_SPACE (0x2C)
@@ -2914,31 +2665,15 @@ if Object.const_defined?(:Win32API)
   (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 58 }
   
   # Define global Proc for checking key state (avoids scope issues with define_method)
-  # CRITICAL FIX: Use live_key_states FIRST for instant input detection!
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
-      # IMPORTANT: Try live_key_states FIRST (direct EventThread::keyStates access)
-      # This bypasses the buffered raw_key_states which only updates on Input.update
-      # Games that don't call Input.update will still get correct key states!
-      states = nil
-      if Input.respond_to?(:live_key_states)
-        states = Input.live_key_states rescue nil
-      end
-      states ||= Input.raw_key_states rescue nil
+      states = Input.raw_key_states rescue nil
       return 0 unless states
       
       sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
       
       pressed = false
-      
-      # Handle mouse buttons via Input.press? API
-      if sdl_scan == -1  # VK_LBUTTON
-        pressed = Input.press?(Input::MOUSELEFT) rescue false
-      elsif sdl_scan == -2  # VK_RBUTTON
-        pressed = Input.press?(Input::MOUSERIGHT) rescue false
-      elsif sdl_scan == -3  # VK_MBUTTON
-        pressed = Input.press?(Input::MOUSEMIDDLE) rescue false
-      elsif sdl_scan
+      if sdl_scan
         if sdl_scan == -10  # Combined Shift
           pressed = (states[225] rescue false) || (states[229] rescue false)
         elsif sdl_scan == -11  # Combined Control
@@ -3050,25 +2785,17 @@ end
                 // ================================================================
                 // WIN32API POSTLOAD PATCH
                 // Run after Win32API script or before Main script
-                // ALSO: Match script names that contain "Win32" or "Controls"
                 // ================================================================
                 static bool win32api_patched = false;
                 bool should_patch = false;
                 
-                // Check if we should patch - expanded to match more script names
+                // Check if we should patch
                 if (!win32api_patched) {
-                    // Match exact names
-                    if (strcmp(scriptName, "Win32API") == 0 ||
-                        strcmp(scriptName, "Main") == 0) {
-                        fprintf(stderr, "[MKXP-Z] %s script detected - Applying Win32API patch...\n", scriptName);
+                    if (strcmp(scriptName, "Win32API") == 0) {
+                        fprintf(stderr, "[MKXP-Z] Win32API script execution detected - Applying patch...\n");
                         should_patch = true;
-                    }
-                    // Match partial names for Pokemon fangames that use custom input scripts
-                    else if (strstr(scriptName, "Win32") != nullptr ||
-                             strstr(scriptName, "Controls") != nullptr ||
-                             strstr(scriptName, "Input") != nullptr ||
-                             strstr(scriptName, "Keyboard") != nullptr) {
-                        fprintf(stderr, "[MKXP-Z] Input-related script '%s' detected - Applying Win32API patch...\n", scriptName);
+                    } else if (strcmp(scriptName, "Main") == 0) {
+                        fprintf(stderr, "[MKXP-Z] Main script detected (Win32API not patched yet) - Applying patch...\n");
                         should_patch = true;
                     }
                 }
@@ -3076,18 +2803,11 @@ end
                 if (should_patch) {
                     const char* win32apiPatch = R"RUBY(
 # Win32API GetAsyncKeyState/GetKeyState Postload Patch
-# CRITICAL FIX: Use live_key_states for instant input detection!
 if Object.const_defined?(:Win32API)
   puts "[MKXP-Z] Patching Win32API for GetAsyncKeyState/GetKeyState..."
   
   # Windows VK to SDL Scancode mapping (comprehensive)
-  # FIXED: Added mouse button mappings
-  $__mkxpz_vk_to_sdl ||= {
-    # Mouse buttons
-    0x01 => -1,   # VK_LBUTTON
-    0x02 => -2,   # VK_RBUTTON
-    0x04 => -3,   # VK_MBUTTON
-    
+  $__mkxpz_vk_to_sdl = {
     0x0D => 40,   # VK_RETURN -> SDL_SCANCODE_RETURN
     0x1B => 41,   # VK_ESCAPE -> SDL_SCANCODE_ESCAPE
     0x20 => 44,   # VK_SPACE -> SDL_SCANCODE_SPACE
@@ -3109,37 +2829,23 @@ if Object.const_defined?(:Win32API)
   }
   
   # Add A-Z (VK 0x41-0x5A -> SDL_SCANCODE_A-Z = 4-29)
-  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x41 + 4 }
+  (0x41..0x5A).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x41 + 4 }
   # Add 0-9 (VK 0x30-0x39 -> SDL_SCANCODE_0=39, SDL_SCANCODE_1-9=30-38)
-  $__mkxpz_vk_to_sdl[0x30] ||= 39  # 0 -> SDL_SCANCODE_0
-  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x31 + 30 }
+  $__mkxpz_vk_to_sdl[0x30] = 39  # 0 -> SDL_SCANCODE_0
+  (0x31..0x39).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x31 + 30 }
   # Add F1-F12 (VK 0x70-0x7B -> SDL_SCANCODE_F1-F12 = 58-69)
-  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] ||= vk - 0x70 + 58 }
+  (0x70..0x7B).each { |vk| $__mkxpz_vk_to_sdl[vk] = vk - 0x70 + 58 }
   
   # Define global Proc for checking key state (avoids scope issues with define_method)
-  # CRITICAL: Use live_key_states for instant input!
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
-      # IMPORTANT: Use live_key_states FIRST (direct EventThread::keyStates)
-      states = nil
-      if Input.respond_to?(:live_key_states)
-        states = Input.live_key_states rescue nil
-      end
-      states ||= Input.raw_key_states rescue nil
+      states = Input.raw_key_states rescue nil
       return 0 unless states
       
       sdl_scan = $__mkxpz_vk_to_sdl[vk_code]
       
       pressed = false
-      
-      # Handle mouse buttons via Input.press? API
-      if sdl_scan == -1  # VK_LBUTTON
-        pressed = Input.press?(Input::MOUSELEFT) rescue false
-      elsif sdl_scan == -2  # VK_RBUTTON
-        pressed = Input.press?(Input::MOUSERIGHT) rescue false
-      elsif sdl_scan == -3  # VK_MBUTTON
-        pressed = Input.press?(Input::MOUSEMIDDLE) rescue false
-      elsif sdl_scan
+      if sdl_scan
         if sdl_scan == -10  # Combined Shift
           pressed = (states[225] rescue false) || (states[229] rescue false)
         elsif sdl_scan == -11  # Combined Control
@@ -3183,31 +2889,11 @@ if Object.const_defined?(:Win32API)
     if win32api_class.instance_methods.include?(:call)
       original_call = win32api_class.instance_method(:call)
       
-      # Also patch initialize to capture DLL and function names
-      # This ensures we can get the names even if they're stored differently
-      unless win32api_class.method_defined?(:__mkxpz_orig_init__)
-        win32api_class.class_eval do
-          alias_method :__mkxpz_orig_init__, :initialize
-          def initialize(dll, func, *args)
-            @__mkxpz_dll = dll.to_s
-            @__mkxpz_func = func.to_s
-            __mkxpz_orig_init__(dll, func, *args)
-          rescue => e
-            # If original init fails, store the names anyway
-            @__mkxpz_dll ||= dll.to_s
-            @__mkxpz_func ||= func.to_s
-            raise
-          end
-        end
-        puts "[MKXP-Z] Win32API.initialize patched to capture DLL/func names"
-      end
-      
       # Patch the call method - using class_eval to access define_method safely
       win32api_class.class_eval do
         define_method(:call) do |*args|
-          # Try multiple instance variable names for compatibility
-          func_lower = (@__mkxpz_func || @func || @function || @_mkxpz_func || '').to_s.downcase
-          dll_lower = (@__mkxpz_dll || @dll || @dllname || @_mkxpz_dll || '').to_s.downcase
+          func_lower = (@func || @function || '').to_s.downcase
+          dll_lower = (@dll || @dllname || '').to_s.downcase
           
           if dll_lower.include?('user32')
             if func_lower == 'getasynckeystate'
@@ -3219,35 +2905,15 @@ if Object.const_defined?(:Win32API)
               result = $__mkxpz_check_keystate_proc.call(vk_code)
               # Fix: GetKeyState also returns high-order bit for pressed status
               return result == 1 ? 0x8000 : 0
-            elsif func_lower == 'getkeyboardstate'
-              # GetKeyboardState fills a 256-byte buffer with key states
-              lpKeyState = args[0]
-              if lpKeyState.is_a?(String) && lpKeyState.bytesize >= 256
-                states = nil
-                if Input.respond_to?(:live_key_states)
-                  states = Input.live_key_states rescue nil
-                end
-                states ||= Input.raw_key_states rescue nil
-                
-                if states
-                  256.times do |vk|
-                    result = $__mkxpz_check_keystate_proc.call(vk) rescue 0
-                    lpKeyState[vk] = (result == 1 ? 0x80 : 0).chr
-                  end
-                end
-                return 1  # Success
-              end
-              return 0
             end
           end
           original_call.bind(self).call(*args)
         end
       end
-      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState/GetKeyboardState"
+      puts "[MKXP-Z] [OK] Win32API.call patched for GetAsyncKeyState/GetKeyState (global Proc + Aliases)"
     end
   rescue => e
     puts "[MKXP-Z] Warning: Could not patch Win32API: #{e.message}"
-    puts e.backtrace.first(3).join("\n") rescue nil
   end
 end
 )RUBY";
