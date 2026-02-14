@@ -1674,6 +1674,15 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
     
     std::string result = script;
     
+    // Check for UTF-8 BOM (\xEF\xBB\xBF) and remove it if present
+    // This fixes syntax errors like "unexpected '=', ignoring it" when a script starts with BOM + "=begin"
+    if (result.size() >= 3) {
+        const unsigned char* bytes = reinterpret_cast<const unsigned char*>(result.c_str());
+        if (bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+            result.erase(0, 3);
+        }
+    }
+    
     try {
         // =========================================================================
         // 1. Convert "when X:" syntax to "when X then" (Ruby 1.8 -> 3.x)
