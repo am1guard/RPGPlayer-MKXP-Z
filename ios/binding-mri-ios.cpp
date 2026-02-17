@@ -308,7 +308,7 @@ static void mriBindingInit() {
     // The require mechanism doesn't work properly with static extensions on iOS
     // Note: Encoding is already initialized by ruby_init(), don't call Init_enc/Init_Encoding/Init_encodings
     Init_zlib();
-    Debug() << "Zlib initialized directly for static linking";
+    Debug() << "Zlib initialized directly for static linking (StringIO will be polyfilled)";
     
     // =============================================================================
     // SUPERCLASS MISMATCH FIX FOR OLD RPG MAKER SCRIPTS
@@ -352,6 +352,21 @@ static void mriBindingInit() {
         "    begin\n"
         "      @eval_stack[filename] += 1\n"
         "      eval(code, binding_obj, filename, lineno)\n"
+        "    rescue SyntaxError => e\n"
+        "      if e.message.include?('unexpected keyword arg given in index assignment')\n"
+        "        $stderr.puts \"[MKXP-Z] SyntaxError (Keyword Arg in Index Assignment) detected in #{filename}\"\n"
+        "        pattern = /\\[([^\\[\\]:]+:\\s*[^\\[\\]:]+)\\]\\s*=/\n"
+        "        if code =~ pattern\n"
+        "          new_code = code.gsub(pattern, '[{\\1}] =')\n"
+        "          $stderr.puts \"[MKXP-Z] Fixed: Wrapped keyword args in braces for index assignment\"\n"
+        "          return wrap_eval(caller_binding, new_code, binding_obj, filename, lineno)\n"
+        "        else\n"
+        "          $stderr.puts \"[MKXP-Z] FAILED to find faulty index assignment in code\"\n"
+        "        end\n"
+        "        raise\n"
+        "      else\n"
+        "        raise\n"
+        "      end\n"
         "    rescue TypeError => e\n"
         "      if e.message.include?('superclass mismatch')\n"
         "        # 1. Extract class name\n"
@@ -403,6 +418,21 @@ static void mriBindingInit() {
         "$LOADED_FEATURES << 'zlib.so' unless $LOADED_FEATURES.include?('zlib.so'); "
         "$LOADED_FEATURES << 'zlib.rb' unless $LOADED_FEATURES.include?('zlib.rb'); "
         "$LOADED_FEATURES << 'zlib' unless $LOADED_FEATURES.include?('zlib'); "
+        "$LOADED_FEATURES << 'stringio.so' unless $LOADED_FEATURES.include?('stringio.so'); "
+        "$LOADED_FEATURES << 'stringio.rb' unless $LOADED_FEATURES.include?('stringio.rb'); "
+        "$LOADED_FEATURES << 'stringio' unless $LOADED_FEATURES.include?('stringio'); "
+        "class StringIO; "
+        "  def initialize(s=''); @s=s.to_s.dup.force_encoding('BINARY'); @p=0; end; "
+        "  def self.open(*a); io=new(*a); return io unless block_given?; begin; yield io; ensure; io.close; end; end; "
+        "  def string; @s; end; def string=(s); @s=s.to_s.dup.force_encoding('BINARY'); @p=0; end; "
+        "  def read(l=nil); return nil if eof? && l; r=l ? @s[@p,l] : @s[@p..-1]; @p+=(l || (@s.length-@p)); r; end; "
+        "  def write(s); s=s.to_s; @s[@p,s.length]=s; @p+=s.length; s.length; end; "
+        "  def puts(*a); a.each{|x|write(x.to_s+\"\\n\")}; nil; end; "
+        "  def gets(sep=$/); return nil if eof?; i=@s.index(sep,@p); if i; r=@s[@p..i]; @p=i+sep.length; else; r=@s[@p..-1]; @p=@s.length; end; r; end; "
+        "  def pos; @p; end; def pos=(p); @p=p; end; def rewind; @p=0; end; def eof?; @p>=@s.length; end; "
+        "  def seek(p,w=0); case w; when 0; @p=p; when 1; @p+=p; when 2; @p=@s.length+p; end; @p=0 if @p<0; 0; end; "
+        "  alias_method :tell, :pos; def close; @c=true; end; def closed?; @c; end; "
+        "end unless defined?(StringIO); "
         , &state);
     
     // Stub Win32API ONLY if the game doesn't already define it
