@@ -1741,26 +1741,18 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
         // a comma/space (symbol context) is the case delimiter.
         //
         // Strategy: Match "when" + simple literals (numbers, strings, symbols) + ":"
-        // Simple case: when followed by a number/identifier, then ":"
+        std::string whenPred = R"(-?\d+(?:\.\d+)?|[@$]{0,2}[a-zA-Z_]\w*[?!]?(?:::[a-zA-Z_]\w*[?!]?)*|:[a-zA-Z_]\w*[?!]?|'[^']*'|"[^"]*")";
+        
+        // Simple case: when followed by a single predicate, then ":"
         std::regex whenColonPatternSimple(
-            R"((when\s+)(\d+)\s*:\s*)",
+            R"((when\s+)()" + whenPred + R"()\s*:(?!:)\s*)",
             std::regex::multiline
         );
         result = std::regex_replace(result, whenColonPatternSimple, "$1$2 then ");
         
-        // Also handle quoted strings and symbols in when clauses
-        // Pattern: when 'string': or when "string": or when :symbol:
-        std::regex whenColonPatternQuoted(
-            R"((when\s+)('[^']*'|"[^"]*")\s*:\s*)",
-            std::regex::multiline
-        );
-        result = std::regex_replace(result, whenColonPatternQuoted, "$1$2 then ");
-        
-        // Handle multiple values: when 1, 2, 3:
-        // This is tricky because we need to find the LAST colon after the when clause
-        // Pattern: when <value>(, <value>)*:
+        // Handle multiple values: when A, B, C:
         std::regex whenColonPatternMulti(
-            R"((when\s+)(\d+(?:\s*,\s*\d+)*)\s*:\s*)",
+            R"((when\s+)((?:)" + whenPred + R"()(?:\s*,\s*(?:)" + whenPred + R"())*)\s*:(?!:)\s*)",
             std::regex::multiline  
         );
         result = std::regex_replace(result, whenColonPatternMulti, "$1$2 then ");
@@ -2429,6 +2421,21 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
     std::string result = script;
     std::string sName = scriptName;
 
+    // Pokemon HGSS / Cable Club Fix: "else without rescue is useless" syntax error
+    // In Ruby 1.8, 'else' was sometimes used inside 'begin' blocks without 'rescue'
+    // Ruby 3.x/Prism rejects this. We safely remove the useless 'else' keyword.
+    if (sName.find("Cable Club") != std::string::npos) {
+        try {
+            std::regex pattern(R"(begin(\s+)yield record(\s+)else)");
+            if (std::regex_search(result, pattern)) {
+                result = std::regex_replace(result, pattern, "begin$1yield record$2");
+                Debug() << "[MKXP-Z] SYNTAX FIX: Removed useless 'else' in begin block in script '" << scriptName << "'";
+            }
+        } catch (const std::regex_error& e) {
+            Debug() << "[MKXP-Z] Cable Club regex error: " << e.what();
+        }
+    }
+
     // Pokemon Insurgence Fix: Connect/Register/Login/Deuks double 'end' syntax error
     // Error: SyntaxError: 189:Connect/Register/Login/Deuks:959: syntax error found
     // 957 |     pbSave
@@ -2849,6 +2856,38 @@ if Object.const_defined?(:Win32API)
 else
   puts "[MKXP-Z] Win32API class not defined, skipping patch"
 end
+
+# ---------- NEW: MiniFFI Patch ----------
+if Object.const_defined?(:MiniFFI)
+  puts "[MKXP-Z] Patching MiniFFI..."
+  miniffi = Object.const_get(:MiniFFI)
+  
+  # Patch pbFindRgssWindow
+  miniffi.define_singleton_method(:pbFindRgssWindow) do
+    puts "[MKXP-Z] MiniFFI.pbFindRgssWindow (postload-patched) - returning mock handle"
+    return 0x12345678
+  end
+  
+  # Patch restoreScreen
+  miniffi.define_singleton_method(:restoreScreen) do
+    return true
+  end
+  
+  # Patch getWindowRect
+  miniffi.define_singleton_method(:getWindowRect) do |*args|
+    w = $SCREEN_WIDTH || 640
+    h = $SCREEN_HEIGHT || 480
+    return [0, 0, w, h]
+  end
+  
+  # Patch setWindowPos / SetWindowPos
+  miniffi.define_singleton_method(:setWindowPos) { |*args| return true }
+  miniffi.define_singleton_method(:SetWindowPos) { |*args| return true }
+  
+  puts "[MKXP-Z] [OK] MiniFFI methods patched"
+else
+  puts "[MKXP-Z] MiniFFI class not defined yet, skipping patch"
+end
 )RUBY";
                 
                 int patchState;
@@ -3008,6 +3047,38 @@ if Object.const_defined?(:Win32API)
   rescue => e
     puts "[MKXP-Z] Warning: Could not patch Win32API: #{e.message}"
   end
+end
+
+# ---------- NEW: MiniFFI Patch ----------
+if Object.const_defined?(:MiniFFI)
+  puts "[MKXP-Z] Patching MiniFFI..."
+  miniffi = Object.const_get(:MiniFFI)
+  
+  # Patch pbFindRgssWindow
+  miniffi.define_singleton_method(:pbFindRgssWindow) do
+    puts "[MKXP-Z] MiniFFI.pbFindRgssWindow (postload-patched) - returning mock handle"
+    return 0x12345678
+  end
+  
+  # Patch restoreScreen
+  miniffi.define_singleton_method(:restoreScreen) do
+    return true
+  end
+  
+  # Patch getWindowRect
+  miniffi.define_singleton_method(:getWindowRect) do |*args|
+    w = $SCREEN_WIDTH || 640
+    h = $SCREEN_HEIGHT || 480
+    return [0, 0, w, h]
+  end
+  
+  # Patch setWindowPos / SetWindowPos
+  miniffi.define_singleton_method(:setWindowPos) { |*args| return true }
+  miniffi.define_singleton_method(:SetWindowPos) { |*args| return true }
+  
+  puts "[MKXP-Z] [OK] MiniFFI methods patched"
+else
+  puts "[MKXP-Z] MiniFFI class not defined yet, skipping patch"
 end
 )RUBY";
                     int patchState;
