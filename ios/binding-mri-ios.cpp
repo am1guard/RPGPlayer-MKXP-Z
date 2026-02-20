@@ -2471,6 +2471,22 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
         }
     }
 
+    // Pokemon Daybreak Fix: "unexpected '('; expected a `,` separator for the array elements"
+    // In Ruby 1.8, 'EnumOption.new (...)' was acceptable. Ruby 3.x/Prism strict syntax requires
+    // no space between the method name and the parenthesis to parse correctly as arguments.
+    if (sName.find("PScreen_Options") != std::string::npos) {
+        try {
+            // Match: ".new (" with variable amount of spaces and change to ".new("
+            std::regex pattern(R"(\.new\s+\()");
+            if (std::regex_search(result, pattern)) {
+                result = std::regex_replace(result, pattern, ".new(");
+                Debug() << "[MKXP-Z] SYNTAX FIX: Removed space before argument parenthesis in script '" << scriptName << "'";
+            }
+        } catch (const std::regex_error& e) {
+            Debug() << "[MKXP-Z] PScreen_Options regex error: " << e.what();
+        }
+    }
+
     return result;
 }
 
