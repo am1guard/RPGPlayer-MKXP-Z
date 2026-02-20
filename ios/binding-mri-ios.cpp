@@ -2445,6 +2445,21 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
         }
     }
 
+    // Pokemon Awakening Fix: PokeBattle_BES-T_BattleInfo uses "next" inside a def block
+    // The Prism parser rejects this as "Invalid next" since next is only valid in loops/blocks.
+    // Replace "next" followed by "if minus <= 0" with "return" to fix the syntax error.
+    if (sName.find("PokeBattle_BES-T_BattleInfo") != std::string::npos) {
+        try {
+            std::regex pattern(R"(\bnext\b(?=\s+if\s+minus\s*<=\s*0))");
+            if (std::regex_search(result, pattern)) {
+                result = std::regex_replace(result, pattern, "return");
+                Debug() << "[MKXP-Z] SYNTAX FIX: Replaced 'next' with 'return' in script '" << scriptName << "'";
+            }
+        } catch (const std::regex_error& e) {
+            Debug() << "[MKXP-Z] PokeBattle_BES-T_BattleInfo regex error: " << e.what();
+        }
+    }
+
     return result;
 }
 
@@ -3066,7 +3081,7 @@ end
             // If there was still an error (non-superclass-mismatch), log and break
             if (state) {
                 // Log the error details
-                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✗ ERROR in script: %s\n", i, scriptCount, scriptName);
+                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ERROR in script: %s\n", i, scriptCount, scriptName);
                 fprintf(stderr, "[MKXP-Z] Error state: %d\n", state);
                 
                 // Try to get error details
@@ -3074,8 +3089,65 @@ end
                 if (errInfo != Qnil) {
                     VALUE errClass = rb_class_name(rb_obj_class(errInfo));
                     VALUE errMsg = rb_funcall(errInfo, rb_intern("message"), 0);
-                    fprintf(stderr, "[MKXP-Z] Exception: %s: %s\n", 
-                            StringValueCStr(errClass), StringValueCStr(errMsg));
+                    const char* msgStr = StringValueCStr(errMsg);
+                    const char* classStr = StringValueCStr(errClass);
+                    fprintf(stderr, "[MKXP-Z] Exception: %s: %s\n", classStr, msgStr);
+                    
+                    // =================================================================
+                    // "Invalid next" / "Invalid break" SyntaxError Auto-Fix
+                    // =================================================================
+                    // Modern Ruby's Prism parser rejects next/break inside def blocks.
+                    // Older RPG Maker scripts sometimes use next/break where return
+                    // should be used. We detect this at runtime and fix it via regex.
+                    if (strstr(classStr, "SyntaxError") != nullptr &&
+                        (strstr(msgStr, "Invalid next") != nullptr || strstr(msgStr, "Invalid break") != nullptr)) {
+                        
+                        fprintf(stderr, "[MKXP-Z] Detected Invalid next/break SyntaxError in '%s', attempting auto-fix...\n", scriptName);
+                        
+                        // Get the original script content
+                        std::string scriptContent = RSTRING_PTR(scriptDecoded);
+                        bool fixed = false;
+                        
+                        try {
+                            if (strstr(msgStr, "Invalid next") != nullptr) {
+                                std::regex nextPattern(R"(\bnext\b)");
+                                scriptContent = std::regex_replace(scriptContent, nextPattern, "return");
+                                fprintf(stderr, "[MKXP-Z] Replaced all 'next' with 'return' in '%s'\n", scriptName);
+                                fixed = true;
+                            }
+                            if (strstr(msgStr, "Invalid break") != nullptr) {
+                                std::regex breakPattern(R"(\bbreak\b)");
+                                scriptContent = std::regex_replace(scriptContent, breakPattern, "return");
+                                fprintf(stderr, "[MKXP-Z] Replaced all 'break' with 'return' in '%s'\n", scriptName);
+                                fixed = true;
+                            }
+                        } catch (const std::regex_error& e) {
+                            fprintf(stderr, "[MKXP-Z] Regex error during Invalid next/break fix: %s\n", e.what());
+                        }
+                        
+                        if (fixed) {
+                            // Clear the error and retry with the fixed script
+                            rb_set_errinfo(Qnil);
+                            VALUE fixedString = rb_utf8_str_new_cstr(scriptContent.c_str());
+                            int retryState;
+                            evalString(fixedString, fname, &retryState);
+                            
+                            if (retryState == 0) {
+                                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Fixed Invalid next/break in '%s' (replaced with return)\n", i, scriptCount, scriptName);
+                                continue;
+                            } else {
+                                // Still failed after fix
+                                VALUE retryExc = rb_errinfo();
+                                if (retryExc != Qnil) {
+                                    VALUE retryMsg = rb_funcall(retryExc, rb_intern("message"), 0);
+                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", StringValueCStr(retryMsg));
+                                }
+                                rb_set_errinfo(Qnil);
+                                fprintf(stderr, "[MKXP-Z] SKIPPING script after failed auto-fix: %s\n", scriptName);
+                                continue;
+                            }
+                        }
+                    }
                     
                     // Get backtrace
                     VALUE bt = rb_funcall(errInfo, rb_intern("backtrace"), 0);
