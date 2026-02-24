@@ -1084,7 +1084,14 @@ static void printP(int argc, VALUE *argv, const char *convMethod,
             rb_str_buf_cat2(dispString, sep);
     }
     
+#if defined(IOS_PLATFORM) || defined(__IPHONEOS__)
+    // iOS: Don't call showMsg() here -- it sets rqTermAck which kills the engine.
+    // On desktop MKXP-Z, print/p shows a blocking dialog then returns (game continues).
+    // On iOS we simply log the message and continue, matching desktop behavior.
+    fprintf(stderr, "[MKXP-Z] RGSS print: %s\n", RSTRING_PTR(dispString));
+#else
     showMsg(RSTRING_PTR(dispString));
+#endif
 }
 
 
