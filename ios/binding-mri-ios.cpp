@@ -1034,6 +1034,49 @@ static void mriBindingInit() {
         "    return 0 <=> other if other.is_a?(Numeric)\n"
         "    nil\n"
         "  end\n"
+        "  # Add safe property accessors for uninitialized sprites/objects\n"
+        "  def x; 0; end\n"
+        "  def y; 0; end\n"
+        "  def z; 0; end\n"
+        "  def x=(v); end\n"
+        "  def y=(v); end\n"
+        "  def z=(v); end\n"
+        "  def width; 0; end\n"
+        "  def height; 0; end\n"
+        "  def dispose; end\n"
+        "  def disposed?; true; end\n"
+        "  def opacity; 0; end\n"
+        "  def opacity=(v); end\n"
+        "  def visible; false; end\n"
+        "  def visible=(v); end\n"
+        "  def blend_type; 0; end\n"
+        "  def blend_type=(v); end\n"
+        "  def angle; 0; end\n"
+        "  def angle=(v); end\n"
+        "  def zoom_x; 1.0; end\n"
+        "  def zoom_x=(v); end\n"
+        "  def zoom_y; 1.0; end\n"
+        "  def zoom_y=(v); end\n"
+        "  def ox; 0; end\n"
+        "  def ox=(v); end\n"
+        "  def oy; 0; end\n"
+        "  def oy=(v); end\n"
+        "  def mirror; false; end\n"
+        "  def mirror=(v); end\n"
+        "  def bush_depth; 0; end\n"
+        "  def bush_depth=(v); end\n"
+        "  def bush_opacity; 0; end\n"
+        "  def bush_opacity=(v); end\n"
+        "  def bitmap; Bitmap.new(1,1); end\n"
+        "  def bitmap=(v); end\n"
+        "  def color; Color.new(0,0,0,0); end\n"
+        "  def color=(v); end\n"
+        "  def tone; Tone.new(0,0,0,0); end\n"
+        "  def tone=(v); end\n"
+        "  def src_rect; Rect.new(0,0,0,0); end\n"
+        "  def src_rect=(v); end\n"
+        "  def viewport; nil; end\n"
+        "  def viewport=(v); end\n"
         "end\n",
         &state);
     
@@ -1050,6 +1093,37 @@ static void mriBindingInit() {
     if (shState->config().winConsole)
         configureWindowsStreams();
 #endif
+
+    // =============================================================================
+    // Dir.pwd ENCODING FIX
+    // Dir.pwd might return ASCII-8BIT on iOS, causing Encoding::CompatibilityError
+    // when used with UTF-8 strings in String#sub! (e.g. in pbPrintException)
+    // =============================================================================
+    rb_eval_string_protect(
+        "class Dir\n"
+        "  class << self\n"
+        "    alias :__mkxpz_original_pwd :pwd\n"
+        "    def pwd\n"
+        "      __mkxpz_original_pwd.force_encoding('UTF-8')\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        &state);
+        
+    if (state == 0) {
+        Debug() << "Dir.pwd encoding fix installed successfully";
+    } else {
+        Debug() << "Warning: Could not install Dir.pwd encoding fix";
+        rb_errinfo();
+    }
+
+    // Instrumentation for debugging
+    rb_eval_string_protect(
+        "File.open('/Users/han/Kod/rpgplayerfullcalisan-main/.cursor/debug-a62067.log', 'a') do |f|\n"
+        "  f.puts %Q({\"sessionId\":\"a62067\",\"id\":\"log_#{Time.now.to_i}\",\"timestamp\":#{Time.now.to_i * 1000},\"location\":\"binding-mri-ios.cpp\",\"message\":\"Dir.pwd encoding check\",\"data\":{\"pwd_encoding\":Dir.pwd.encoding.name,\"data_dir_encoding\":System.data_directory.encoding.name},\"runId\":\"run1\",\"hypothesisId\":\"A\"})\n"
+        "end rescue nil\n",
+        &state);
+
 }
 
 static void showMsg(const std::string &msg) {
