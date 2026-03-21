@@ -161,6 +161,7 @@ RB_METHOD(_kernelCaller);
 
 RB_METHOD(mkxpStringToUTF8);
 RB_METHOD(mkxpStringToUTF8Bang);
+RB_METHOD(mkxpPreprocessRubyScript);
 
 VALUE json2rb(json5pp::value const &v);
 json5pp::value rb2json(VALUE v);
@@ -272,6 +273,7 @@ static void mriBindingInit() {
     _rb_define_module_function(mod, "default_font_family=", mkxpSetDefaultFontFamily);
     
     _rb_define_module_function(mod, "parse_csv", mkxpParseCSV);
+    _rb_define_module_function(mod, "preprocess_ruby_script", mkxpPreprocessRubyScript);
     
     _rb_define_method(rb_cString, "to_utf8", mkxpStringToUTF8);
     _rb_define_method(rb_cString, "to_utf8!", mkxpStringToUTF8Bang);
@@ -342,6 +344,10 @@ static void mriBindingInit() {
         "    binding_obj = args[0] || caller_binding\n"
         "    filename = args[1] || '(eval)'\n"
         "    lineno = args[2] || 1\n"
+        "    \n"
+        "    if System.respond_to?(:preprocess_ruby_script)\n"
+        "      code = System.preprocess_ruby_script(code, filename)\n"
+        "    end\n"
         "    \n"
         "    @eval_stack[filename] ||= 0\n"
         "    if @eval_stack[filename] > 5\n"
@@ -1826,14 +1832,14 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
         
         // Simple case: when followed by a single predicate, then ":"
         std::regex whenColonPatternSimple(
-            R"((when\s+)()" + whenPred + R"()\s*:(?!:)\s*)",
+            R"((\bwhen\s+)()" + whenPred + R"()\s*:(?!:)\s*)",
             std::regex::multiline
         );
         result = std::regex_replace(result, whenColonPatternSimple, "$1$2 then ");
         
         // Handle multiple values: when A, B, C:
         std::regex whenColonPatternMulti(
-            R"((when\s+)((?:)" + whenPred + R"()(?:\s*,\s*(?:)" + whenPred + R"())*)\s*:(?!:)\s*)",
+            R"((\bwhen\s+)((?:)" + whenPred + R"()(?:\s*,\s*(?:)" + whenPred + R"())*)\s*:(?!:)\s*)",
             std::regex::multiline  
         );
         result = std::regex_replace(result, whenColonPatternMulti, "$1$2 then ");
@@ -2582,6 +2588,90 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
     return result;
 }
 
+static std::string applyScriptPreprocessing(const std::string& script, const std::string& scriptName) {
+    if (script.empty()) return script;
+    
+    std::string processedScript = preprocessRuby18Syntax(script);
+    
+    if (needsRetrySyntaxFix(processedScript)) {
+        processedScript = fixRetrySyntax(processedScript, scriptName.c_str());
+    }
+    
+    if (needsClassVariableCompat(processedScript)) {
+        processedScript = wrapScriptForClassVariableCompat(processedScript, scriptName.c_str());
+    }
+    
+    if (needsBreakSyntaxFix(processedScript, scriptName)) {
+        processedScript = fixBreakSyntax(processedScript, scriptName.c_str());
+        processedScript = wrapLoopsWithCatch(processedScript, scriptName.c_str());
+    }
+    
+    processedScript = fixSpecificScriptErrors(processedScript, scriptName.c_str());
+    
+    // Intercept 'eval' calls to catch superclass mismatches.
+    // We replace 'eval(' with 'MKXPZSuperclassFix.wrap_eval(binding, '
+    size_t start_pos = 0;
+    while((start_pos = processedScript.find("eval(", start_pos)) != std::string::npos) {
+        bool is_valid_eval = true;
+        
+        if (start_pos > 0) {
+            char prev = processedScript[start_pos-1];
+            if (isalnum(prev) || prev == '_' || prev == '.' || prev == ':' || prev == '@' || prev == '$') {
+                is_valid_eval = false;
+            } else {
+                // Check if preceded by "def "
+                size_t def_check = start_pos;
+                while (def_check > 0 && isspace(processedScript[def_check-1])) {
+                    def_check--;
+                }
+                if (def_check >= 3 && processedScript.substr(def_check-3, 3) == "def") {
+                    if (def_check == 3 || !isalnum(processedScript[def_check-4])) {
+                        is_valid_eval = false;
+                    }
+                }
+            }
+        }
+        
+        if (is_valid_eval) {
+            processedScript.replace(start_pos, 5, "MKXPZSuperclassFix.wrap_eval(binding, ");
+            start_pos += 38;
+        } else {
+            start_pos += 5;
+        }
+    }
+    
+    return processedScript;
+}
+
+RB_METHOD_GUARD(mkxpPreprocessRubyScript) {
+    VALUE script_val, name_val;
+    rb_scan_args(argc, argv, "20", &script_val, &name_val);
+    
+    if (NIL_P(script_val)) return Qnil;
+    if (NIL_P(name_val)) return script_val;
+    
+    std::string script = StringValuePtr(script_val);
+    std::string name = StringValuePtr(name_val);
+    
+    std::string processedScript = applyScriptPreprocessing(script, name);
+    
+    static long dynamic_script_count = 0;
+    dynamic_script_count++;
+    
+    // Distinguish between plugin and folder scripts based on name/context if needed
+    if (name != "(eval)") {
+        fprintf(stderr, "[MKXP-Z] Dynamically loaded script [%ld]: %s\n", dynamic_script_count, name.c_str());
+    } else {
+        // Only log small preview of eval block to prevent giant logs
+        std::string preview = script.substr(0, 30);
+        std::replace(preview.begin(), preview.end(), '\n', ' ');
+        fprintf(stderr, "[MKXP-Z] Dynamically evaluated block [%ld]: %s...\n", dynamic_script_count, preview.c_str());
+    }
+    
+    return rb_utf8_str_new_cstr(processedScript.c_str());
+}
+RB_METHOD_GUARD_END
+
 
 #define SCRIPT_SECTION_FMT (rgssVer >= 3 ? "{%04ld}" : "Section%03ld")
 
@@ -2678,64 +2768,13 @@ static void runRMXPScripts(BacktraceData &btData) {
             break;
         }
         
-        // Preprocess Ruby 1.8 syntax for compatibility with Ruby 4.0's Prism parser
-        std::string processedScript = preprocessRuby18Syntax(decodeBuffer.c_str());
-        
-        // Fix retry syntax (Ruby 1.8 -> 3.x compatibility)
-        // In Ruby 1.8, "retry if condition" was valid in loops. In Ruby 3.x, it's a syntax error.
-        if (needsRetrySyntaxFix(processedScript)) {
-            processedScript = fixRetrySyntax(processedScript, RSTRING_PTR(scriptName));
-        }
-        
-        // Ruby 3.x compatibility: wrap scripts that use @@class_variables in toplevel singleton class
-        // This fixes "class variable access from toplevel" RuntimeError
-        if (needsClassVariableCompat(processedScript)) {
-            processedScript = wrapScriptForClassVariableCompat(processedScript, RSTRING_PTR(scriptName));
-        }
-
-        // =========================================================================
-        // PluginManager Superclass Mismatch Fix
-        // =========================================================================
-        // Intercept 'eval' calls inside PluginManager to catch Game_Temp superclass mismatch.
-        // We replace 'eval(' with 'MKXPZSuperclassFix.wrap_eval(binding, '
-        // passing the current binding to maintain scope.
-        std::string sName = RSTRING_PTR(scriptName);
-        if (sName.find("PluginManager") != std::string::npos) {
-             size_t start_pos = 0;
-             // Regex replacement would be safer but basic string replace works for 'eval('
-             while((start_pos = processedScript.find("eval(", start_pos)) != std::string::npos) {
-                 // Verify it's not part of another word like 'module_eval('
-                 if (start_pos == 0 || (!isalnum(processedScript[start_pos-1]) && processedScript[start_pos-1] != '_')) {
-                     processedScript.replace(start_pos, 5, "MKXPZSuperclassFix.wrap_eval(binding, ");
-                     start_pos += 37; // Length of replacement string
-                     Debug() << "[MKXP-Z] Patched PluginManager eval call to use SuperclassFix";
-                 } else {
-                     start_pos += 5;
-                 }
-             }
-        }
-        
-        // =========================================================================
-        // Break Syntax Fix for Ruby 4.0 Prism Parser (script-specific)
-        // =========================================================================
-        // Fix "Invalid break" syntax errors in known problematic scripts.
-        // This replaces standalone "break" with "throw(:__mkxpz_loop_break__)" and
-        // wraps "loop do" blocks with "catch(:__mkxpz_loop_break__)".
-        if (needsBreakSyntaxFix(processedScript, sName)) {
-            processedScript = fixBreakSyntax(processedScript, RSTRING_PTR(scriptName));
-            processedScript = wrapLoopsWithCatch(processedScript, RSTRING_PTR(scriptName));
-        }
-        
-
-
-        // Apply specific internal syntax fixes (e.g. for Pokemon Insurgence)
-        processedScript = fixSpecificScriptErrors(processedScript, RSTRING_PTR(scriptName));
+        std::string processedScript = applyScriptPreprocessing(decodeBuffer.c_str(), RSTRING_PTR(scriptName));
         
         rb_ary_store(script, 3, rb_utf8_str_new_cstr(processedScript.c_str()));
     }
     
-    fprintf(stderr, "[MKXP-Z] ========== SCRIPT LOADING COMPLETE ==========\n");
-    fprintf(stderr, "[MKXP-Z] Total scripts loaded: %ld\n", scriptCount);
+    fprintf(stderr, "[MKXP-Z] ========== ARCHIVE SCRIPT LOADING COMPLETE ==========\n");
+    fprintf(stderr, "[MKXP-Z] Total archive scripts loaded: %ld\n", scriptCount);
     
     /* Execute preloaded scripts */
     for (std::vector<std::string>::const_iterator i = conf.preloadScripts.begin();
