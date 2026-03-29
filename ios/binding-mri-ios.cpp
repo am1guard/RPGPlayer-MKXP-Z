@@ -2053,14 +2053,40 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
     }
     
     // =========================================================================
-    // 4. Sanitize invalid multibyte escapes in regexes (Fix for Pokemon Iberia)
+    // 4. Sanitize invalid multibyte escapes in regexes
     // =========================================================================
-    // Ruby 3.x is strict about invalid multibyte escape sequences in UTF-8.
-    // Some legacy scripts (like PSystem_Utilities) use ranges like \x7f-\x9f 
-    // which are invalid in UTF-8 regexes. We strip the high-byte range.
+    // Ruby 3.x is strict about high-byte \xNN escapes in UTF-8 regex literals.
+    // Legacy RGSS scripts often rely on byte-oriented regexes such as:
+    //   /\x7f-\x9f/
+    //   /\x80|\x81/
+    // The safest compatibility fix is to keep the original pattern body but
+    // add the binary-regex flag ('n') so Ruby parses it as byte data.
     try {
-        std::regex multibyteEscapePattern(R"(\\x7f-\\x9f)");
-        result = std::regex_replace(result, multibyteEscapePattern, "\\x7f");
+        std::regex highByteRegexLiteral(
+            R"(/((\\.|[^/\r\n])*(\\x[89A-Fa-f][0-9A-Fa-f]|\\x7f-\\x9f)(\\.|[^/\r\n])*)/([mixounes]*))");
+        std::string rebuilt;
+        std::size_t lastPos = 0;
+
+        for (std::sregex_iterator it(result.begin(), result.end(), highByteRegexLiteral), end; it != end; ++it) {
+            const std::smatch& match = *it;
+            rebuilt.append(result, lastPos, static_cast<std::size_t>(match.position()) - lastPos);
+
+            std::string body = match[1].str();
+            std::string flags = match[5].str();
+            if (flags.find('n') == std::string::npos) {
+                flags += 'n';
+            }
+
+            rebuilt += "/";
+            rebuilt += body;
+            rebuilt += "/";
+            rebuilt += flags;
+
+            lastPos = static_cast<std::size_t>(match.position() + match.length());
+        }
+
+        rebuilt.append(result, lastPos, std::string::npos);
+        result = rebuilt;
     } catch (const std::regex_error& e) {
          Debug() << "Multibyte escape patch regex error:" << e.what();
     }
