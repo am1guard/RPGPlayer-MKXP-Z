@@ -304,17 +304,20 @@ struct BitmapPrivate
     void addTaintedArea(const IntRect &rect)
     {
         IntRect norm = normalizedRect(rect);
+        if (norm.w <= 0 || norm.h <= 0)
+            return;
         pixman_region_union_rect
         (&tainted, &tainted, norm.x, norm.y, norm.w, norm.h);
     }
     
     void substractTaintedArea(const IntRect &rect)
     {
-        if (!touchesTaintedArea(rect))
+        IntRect norm = normalizedRect(rect);
+        if (norm.w <= 0 || norm.h <= 0 || !touchesTaintedArea(norm))
             return;
         
         pixman_region16_t m_reg;
-        pixman_region_init_rect(&m_reg, rect.x, rect.y, rect.w, rect.h);
+        pixman_region_init_rect(&m_reg, norm.x, norm.y, norm.w, norm.h);
         
         pixman_region_subtract(&tainted, &m_reg, &tainted);
         
@@ -323,11 +326,15 @@ struct BitmapPrivate
     
     bool touchesTaintedArea(const IntRect &rect)
     {
+        IntRect norm = normalizedRect(rect);
+        if (norm.w <= 0 || norm.h <= 0)
+            return false;
+
         pixman_box16_t box;
-        box.x1 = rect.x;
-        box.y1 = rect.y;
-        box.x2 = rect.x + rect.w;
-        box.y2 = rect.y + rect.h;
+        box.x1 = norm.x;
+        box.y1 = norm.y;
+        box.x2 = norm.x + norm.w;
+        box.y2 = norm.y + norm.h;
         
         pixman_region_overlap_t result =
         pixman_region_contains_rectangle(&tainted, &box);

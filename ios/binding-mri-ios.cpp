@@ -976,45 +976,119 @@ static void mriBindingInit() {
     // Ruby 3.x/4.0 ALIAS_METHOD COMPATIBILITY FIX
     // In Ruby 1.8/1.9, you could alias a method that doesn't exist yet.
     // In Ruby 3.0+, this raises NameError: undefined method.
-    // This shim wraps alias_method to silently ignore undefined methods,
-    // allowing the alias to be created later when the original method is defined.
+    // We install a deferred alias helper so Object/toplevel aliases created
+    // before their target methods exist can be resolved safely later.
     // Applied to ALL RGSS versions since this is a Ruby version issue, not RGSS.
     // =============================================================================
     rb_eval_string_protect(
-        "class Module\n"
-        "  # Store original alias_method\n"
-        "  alias :__mkxpz_original_alias_method__ :alias_method\n"
-        "  \n"
-        "  # Override alias_method to handle undefined methods gracefully\n"
-        "  def alias_method(new_name, old_name)\n"
-        "    # Check if the original method exists\n"
-        "    if method_defined?(old_name) || private_method_defined?(old_name) || protected_method_defined?(old_name)\n"
-        "      __mkxpz_original_alias_method__(new_name, old_name)\n"
-        "    else\n"
-        "      # Method doesn't exist yet - store for later application\n"
-        "      # This allows scripts to define the method after the alias line\n"
-        "      @__mkxpz_pending_aliases__ ||= []\n"
-        "      @__mkxpz_pending_aliases__ << [new_name, old_name]\n"
-        "      # Also hook method_added to apply pending aliases\n"
-        "      unless @__mkxpz_method_added_hooked__\n"
-        "        @__mkxpz_method_added_hooked__ = true\n"
-        "        class << self\n"
-        "          alias :__mkxpz_original_method_added__ :method_added rescue nil\n"
-        "          def method_added(name)\n"
-        "            __mkxpz_original_method_added__(name) if respond_to?(:__mkxpz_original_method_added__, true) rescue nil\n"
-        "            # Check pending aliases\n"
-        "            if @__mkxpz_pending_aliases__\n"
-        "              @__mkxpz_pending_aliases__.each do |new_name, old_name|\n"
-        "                if name.to_sym == old_name.to_sym\n"
-        "                  __mkxpz_original_alias_method__(new_name, old_name) rescue nil\n"
-        "                end\n"
-        "              end\n"
-        "              # Remove applied aliases\n"
-        "              @__mkxpz_pending_aliases__.reject! { |n, o| o.to_sym == name.to_sym }\n"
-        "            end\n"
+        "module MKXPZAliasCompat\n"
+        "  class << self\n"
+        "    def method_available?(owner, name)\n"
+        "      owner.method_defined?(name) || owner.private_method_defined?(name) || owner.protected_method_defined?(name)\n"
+        "    rescue\n"
+        "      false\n"
+        "    end\n"
+        "\n"
+        "    def target_for(scope)\n"
+        "      scope.is_a?(Module) ? scope : Object\n"
+        "    end\n"
+        "\n"
+        "    def pending_aliases(owner)\n"
+        "      owner.instance_variable_get(:@__mkxpz_pending_aliases__) || owner.instance_variable_set(:@__mkxpz_pending_aliases__, [])\n"
+        "    end\n"
+        "\n"
+        "    def log_deferred_alias(owner, new_name, old_name)\n"
+        "      logged = owner.instance_variable_get(:@__mkxpz_logged_deferred_aliases__) || owner.instance_variable_set(:@__mkxpz_logged_deferred_aliases__, {})\n"
+        "      key = [new_name.to_sym, old_name.to_sym]\n"
+        "      return if logged[key]\n"
+        "      logged[key] = true\n"
+        "      STDERR.puts(\"[MKXP-Z] AliasCompat applied deferred alias #{owner}##{new_name} <- #{old_name}\")\n"
+        "    rescue\n"
+        "      nil\n"
+        "    end\n"
+        "\n"
+        "    def apply_original_alias(owner, new_name, old_name)\n"
+        "      return false if method_available?(owner, new_name)\n"
+        "      owner.__send__(:__mkxpz_original_alias_method__, new_name, old_name)\n"
+        "      true\n"
+        "    rescue NameError\n"
+        "      false\n"
+        "    end\n"
+        "\n"
+        "    def resolve_pending_aliases(owner, added_name = nil)\n"
+        "      pending = owner.instance_variable_get(:@__mkxpz_pending_aliases__)\n"
+        "      return if !pending || pending.empty?\n"
+        "\n"
+        "      remaining = []\n"
+        "      pending.each do |new_name, old_name|\n"
+        "        if added_name && old_name.to_sym != added_name.to_sym\n"
+        "          remaining << [new_name, old_name]\n"
+        "          next\n"
+        "        end\n"
+        "\n"
+        "        if method_available?(owner, old_name)\n"
+        "          if apply_original_alias(owner, new_name, old_name)\n"
+        "            log_deferred_alias(owner, new_name, old_name)\n"
+        "          elsif !method_available?(owner, new_name)\n"
+        "            remaining << [new_name, old_name]\n"
         "          end\n"
+        "        else\n"
+        "          remaining << [new_name, old_name]\n"
         "        end\n"
         "      end\n"
+        "\n"
+        "      owner.instance_variable_set(:@__mkxpz_pending_aliases__, remaining)\n"
+        "    end\n"
+        "\n"
+        "    def ensure_method_added_hook(owner)\n"
+        "      return if owner.instance_variable_get(:@__mkxpz_method_added_hooked__)\n"
+        "      owner.instance_variable_set(:@__mkxpz_method_added_hooked__, true)\n"
+        "\n"
+        "      owner.singleton_class.class_eval do\n"
+        "        alias_method :__mkxpz_original_method_added__, :method_added unless method_defined?(:__mkxpz_original_method_added__) rescue nil\n"
+        "        define_method(:method_added) do |name|\n"
+        "          __mkxpz_original_method_added__(name) if respond_to?(:__mkxpz_original_method_added__, true) rescue nil\n"
+        "          MKXPZAliasCompat.resolve_pending_aliases(self, name)\n"
+        "        end\n"
+        "      end\n"
+        "    end\n"
+        "\n"
+        "    def defer_alias(scope, new_name, old_name)\n"
+        "      owner = target_for(scope)\n"
+        "      new_name = new_name.to_sym\n"
+        "      old_name = old_name.to_sym\n"
+        "\n"
+        "      return owner if method_available?(owner, new_name)\n"
+        "\n"
+        "      if method_available?(owner, old_name)\n"
+        "        apply_original_alias(owner, new_name, old_name)\n"
+        "        return owner\n"
+        "      end\n"
+        "\n"
+        "      pending = pending_aliases(owner)\n"
+        "      unless pending.any? { |existing_new, existing_old| existing_new.to_sym == new_name && existing_old.to_sym == old_name }\n"
+        "        pending << [new_name, old_name]\n"
+        "      end\n"
+        "\n"
+        "      ensure_method_added_hook(owner)\n"
+        "      owner\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "\n"
+        "class Module\n"
+        "  alias :__mkxpz_original_alias_method__ :alias_method unless method_defined?(:__mkxpz_original_alias_method__)\n"
+        "\n"
+        "  def alias_method(new_name, old_name)\n"
+        "    new_name = new_name.to_sym\n"
+        "    old_name = old_name.to_sym\n"
+        "\n"
+        "    if MKXPZAliasCompat.method_available?(self, old_name)\n"
+        "      return self if MKXPZAliasCompat.method_available?(self, new_name)\n"
+        "      __mkxpz_original_alias_method__(new_name, old_name)\n"
+        "      self\n"
+        "    else\n"
+        "      MKXPZAliasCompat.defer_alias(self, new_name, old_name)\n"
         "    end\n"
         "  end\n"
         "end\n",
@@ -1849,7 +1923,7 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
         // =========================================================================
         // In Ruby 3.0+, "alias new old" raises NameError if 'old' doesn't exist.
         // We convert: alias new_name old_name
-        // To: alias_method :new_name, :old_name rescue nil
+        // To: MKXPZAliasCompat.defer_alias(self, :new_name, :old_name)
         // 
         // Pattern: alias <new> <old> (not inside string, at start of line or after semicolon)
         // Captures: (alias)\s+(:?\w+)\s+(:?\w+)
@@ -1859,31 +1933,31 @@ static std::string preprocessRuby18Syntax(const std::string& script) {
             std::regex::multiline
         );
         
-        // Replace with: alias_method :new, :old unless method_defined?(:new) rescue nil
+        // Replace with: MKXPZAliasCompat.defer_alias(self, :new, :old)
         // $1 = prefix (whitespace/semicolon), $2 = "alias", $3 = optional colon, $4 = new_name
         // $5 = optional colon, $6 = old_name, $7 = trailing
         // 
-        // IMPORTANT: We ADD "unless method_defined?" check to PREVENT recursion!
+        // IMPORTANT: defer_alias() checks whether the alias already exists to
+        // prevent duplicate-load recursion while still allowing late binding.
         // 
-        // Problem scenario without check:
+        // Problem scenario without an alias guard:
         // 1. Plugin loads: alias oldInit initialize  -> oldInit = original
         //    def initialize calls oldInit (OK)
         // 2. Plugin loads AGAIN (duplicate loading): alias oldInit initialize -> oldInit = PATCHED!
         //    def initialize calls oldInit which calls initialize = INFINITE LOOP!
         // 
-        // With "unless method_defined?" check:
+        // With defer_alias():
         // 1. First load: oldInit undefined, alias created -> oldInit = original
         // 2. Second load: oldInit ALREADY defined, alias SKIPPED!
         //    oldInit still points to original = NO RECURSION!
         // 
         // This fixes "SystemStackError: stack level too deep" in games like Pokemon Anil
         // where plugins like "[Advanced Items - Field Moves]" create alias chains.
-        // NOTE: We also check private_method_defined? because methods like "initialize"
-        // are private in Ruby. method_defined? only checks public/protected methods,
-        // so without this, private aliases (e.g. alias old_init initialize) would be
-        // re-created on duplicate loads, causing infinite recursion.
+        // The helper also resolves Object/toplevel aliases when the original
+        // method appears in a later script, which is needed for plugins such
+        // as Delta Speed Up.
         result = std::regex_replace(result, aliasPattern, 
-            "$1alias_method :$4, :$6 unless (method_defined?(:$4) || private_method_defined?(:$4)) rescue nil$7");
+            "$1MKXPZAliasCompat.defer_alias(self, :$4, :$6)$7");
         
         // =========================================================================
         // 3. Handle superclass mismatch for class definitions (DISABLED)
