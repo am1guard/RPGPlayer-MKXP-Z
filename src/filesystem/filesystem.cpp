@@ -34,6 +34,7 @@
 #include <physfs.h>
 
 #include <algorithm>
+#include <ctype.h>
 #include <stack>
 #include <stdio.h>
 #include <string.h>
@@ -578,6 +579,115 @@ struct OpenReadEnumData {
 };
 
 static PHYSFS_EnumerateCallbackResult
+openReadEnumCB(void *d, const char *dirpath, const char *filename);
+
+static bool isAsciiAlpha(char c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+static bool isAsciiAlphaNum(char c) {
+  return isAsciiAlpha(c) || (c >= '0' && c <= '9');
+}
+
+static bool startsWithCaseInsensitive(const char *text, const char *prefix) {
+  if (!text || !prefix)
+    return false;
+
+  while (*prefix) {
+    if (!*text)
+      return false;
+
+    unsigned char lhs = static_cast<unsigned char>(*text++);
+    unsigned char rhs = static_cast<unsigned char>(*prefix++);
+
+    if (tolower(lhs) != tolower(rhs))
+      return false;
+  }
+
+  return true;
+}
+
+static bool isGraphicsAssetPath(const char *dir) {
+  return startsWithCaseInsensitive(dir, "graphics");
+}
+
+static bool isLocaleSuffixToken(const std::string &token) {
+  if (token.size() == 2)
+    return std::all_of(token.begin(), token.end(), isAsciiAlpha);
+
+  size_t dashPos = token.find('-');
+
+  if (dashPos == std::string::npos || dashPos == 0 ||
+      dashPos == token.size() - 1)
+    return false;
+
+  if (dashPos != 2)
+    return false;
+
+  if (!std::all_of(token.begin(), token.begin() + dashPos, isAsciiAlpha))
+    return false;
+
+  for (size_t i = dashPos + 1; i < token.size(); ++i) {
+    char c = token[i];
+    if (c != '-' && !isAsciiAlphaNum(c))
+      return false;
+  }
+
+  return true;
+}
+
+static bool stripGraphicsLocaleSuffix(const char *filename,
+                                      std::string &strippedFilename) {
+  std::string requested(filename);
+  size_t extPos = requested.rfind('.');
+  size_t stemEnd = (extPos == std::string::npos) ? requested.size() : extPos;
+  size_t underscorePos = requested.rfind('_', stemEnd);
+
+  if (underscorePos == std::string::npos || underscorePos == 0 ||
+      underscorePos + 1 >= stemEnd)
+    return false;
+
+  std::string suffix = requested.substr(underscorePos + 1,
+                                        stemEnd - underscorePos - 1);
+  strTolower(suffix);
+
+  if (!isLocaleSuffixToken(suffix))
+    return false;
+
+  strippedFilename = requested.substr(0, underscorePos);
+
+  if (extPos != std::string::npos)
+    strippedFilename += requested.substr(extPos);
+
+  return !strippedFilename.empty();
+}
+
+static bool tryOpenReadInSameDirectory(FileSystem::OpenHandler &handler,
+                                       FileSystemPrivate *p, const char *dir,
+                                       const char *filename) {
+  OpenReadEnumData data(handler, filename, strlen(filename),
+                        p->havePathCache ? &p->pathCache : 0);
+
+  if (p->havePathCache) {
+    std::string dirKey(dir);
+    if (!p->fileLists.contains(dirKey))
+      return false;
+
+    const std::vector<std::string> &fileList = p->fileLists[dirKey];
+
+    for (size_t i = 0; i < fileList.size(); ++i)
+      openReadEnumCB(&data, dir, fileList[i].c_str());
+  } else {
+    PHYSFS_enumerate(dir, openReadEnumCB, &data);
+  }
+
+  if (data.physfsError)
+    throw Exception(Exception::PHYSFSError, "PhysFS: %s", data.physfsError);
+
+  return data.stopSearching;
+}
+
+static PHYSFS_EnumerateCallbackResult
 openReadEnumCB(void *d, const char *dirpath, const char *filename) {
   OpenReadEnumData &data = *static_cast<OpenReadEnumData *>(d);
   char buffer[512];
@@ -686,6 +796,23 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
 
   if (data.matchCount == 0) {
     fprintf(stderr, "[MKXP-Z] openRead Failed: '%s' -> No match found. Attempting fallback...\n", filename);
+
+    if (isGraphicsAssetPath(dir)) {
+      std::string strippedFilename;
+
+      if (stripGraphicsLocaleSuffix(file, strippedFilename) &&
+          tryOpenReadInSameDirectory(handler, p, dir, strippedFilename.c_str())) {
+        if (*dir) {
+          fprintf(stderr,
+                  "[MKXP-Z] Graphics locale fallback: '%s' -> '%s/%s'\n",
+                  filename, dir, strippedFilename.c_str());
+        } else {
+          fprintf(stderr, "[MKXP-Z] Graphics locale fallback: '%s' -> '%s'\n",
+                  filename, strippedFilename.c_str());
+        }
+        return;
+      }
+    }
 
     // Fallback: Global search in pathCache
     // This handles cases where assets are in different directories than expected
