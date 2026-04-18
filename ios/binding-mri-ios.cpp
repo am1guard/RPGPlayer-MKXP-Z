@@ -1103,7 +1103,24 @@ static void mriBindingInit() {
             "  alias_method :each, :each_line unless method_defined?(:each)\n"
             "end\n",
             &state);
-        
+
+        // String#include? Integer tolerance shim
+        // Eski XP oyunlarinda $game_variables[n] init edilmeden once string
+        // baglaminda kullanilirsa default 0 (Integer) doner ve String#include?
+        // Ruby 3.x'te TypeError atar. Non-String argumanlari to_s'e coerce et.
+        // Orijinal String arg davranisi degismez.
+        rb_eval_string_protect(
+            "class String\n"
+            "  unless method_defined?(:__mkxpz_original_include_q__)\n"
+            "    alias_method :__mkxpz_original_include_q__, :include?\n"
+            "    def include?(arg)\n"
+            "      arg = arg.to_s unless arg.is_a?(String)\n"
+            "      __mkxpz_original_include_q__(arg)\n"
+            "    end\n"
+            "  end\n"
+            "end\n",
+            &state);
+
         MKXP_INFO_LOG("Legacy Ruby compatibility shims installed for RGSS%d\n", rgssVer);
     } else {
         MKXP_DEBUG_LOG("Skipping legacy shims for RGSS%d (not needed for VX Ace)\n", rgssVer);
