@@ -3197,6 +3197,22 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
         Debug() << "[MKXP-Z] Universal space fix regex error: " << e.what();
     }
 
+    // Legacy debug scripts sometimes use Ruby 1.8 command-call syntax:
+    //   print("Missing resource file: "), args[0]
+    // Modern Ruby parses the comma after the parenthesized call as an invalid
+    // write target. Keep this exact script-specific fix narrow to avoid
+    // rewriting valid comma expressions elsewhere.
+    if (sName.find("-debug- crash prevention") != std::string::npos) {
+        const std::string legacyPrint = "print(\"Missing resource file: \"), args[0]";
+        const std::string modernPrint = "print(\"Missing resource file: \", args[0])";
+
+        size_t legacyPrintPos = result.find(legacyPrint);
+        if (legacyPrintPos != std::string::npos) {
+            result.replace(legacyPrintPos, legacyPrint.length(), modernPrint);
+            Debug() << "[MKXP-Z] SYNTAX FIX: Rewrote legacy print comma call in script '" << scriptName << "'";
+        }
+    }
+
     // Pokemon HGSS / Cable Club Fix: "else without rescue is useless" syntax error
     // In Ruby 1.8, 'else' was sometimes used inside 'begin' blocks without 'rescue'
     // Ruby 3.x/Prism rejects this. We safely remove the useless 'else' keyword.
