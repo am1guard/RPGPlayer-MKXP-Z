@@ -3763,27 +3763,25 @@ if Object.const_defined?(:Win32API)
       end
       
       # ALIASES for iOS Virtual Gamepad Interop:
-      # Games often check Z/X keys (0x5A/0x58) but the virtual gamepad 
-      # might behave as Return/Escape or vice versa.
+      # Cancel-side aliases only. Confirm-side cross-aliases (VK_Z <-> Enter,
+      # VK_C <-> Z, VK_RETURN <-> Z) were removed because they cause false
+      # positives in games that bind Z to a *different* action (e.g. Pokemon
+      # Essentials XP's PSystem_Controls maps VK_Z to Input::A "Run", so
+      # firing iOS Enter would also flag Input::A and skip the cursor to OK
+      # in name-entry screens). VK_RETURN -> SDL 40 and VK_C -> SDL 6 already
+      # work via the direct vk_to_sdl table, so iOS Enter / Confirm flows
+      # don't need the alias. Cancel-side X<->ESC stays because ESC and X
+      # universally mean "Cancel/B" across XP/VX/VXAce defaults and PE.
       unless pressed
-        # If Game checks VK_Z (0x5A) -> Also check Enter (40) and Space (44)
-        if vk_code == 0x5A
-          pressed = (states[40] rescue false) || (states[44] rescue false)
         # If Game checks VK_X (0x58) -> Also check Escape (41)
-        elsif vk_code == 0x58
+        if vk_code == 0x58
           pressed = (states[41] rescue false)
-        # If Game checks VK_RETURN (0x0D) -> Also check Z (29) and Space (44)
-        elsif vk_code == 0x0D
-            pressed = (states[29] rescue false) || (states[44] rescue false)
         # If Game checks VK_ESCAPE (0x1B) -> Also check X (27)
         elsif vk_code == 0x1B
-            pressed = (states[27] rescue false)
-        # If Game checks VK_C (0x43) -> Check Enter(40), Z(29), Space(44)
-        elsif vk_code == 0x43
-          pressed = (states[40] rescue false) || (states[29] rescue false) || (states[44] rescue false)
+          pressed = (states[27] rescue false)
         end
       end
-      
+
       return pressed ? 1 : 0
     rescue => e
       puts "[MKXP-Z] Key state check error: #{e.message}"
@@ -3982,22 +3980,19 @@ if Object.const_defined?(:Win32API)
       end
       
       # ALIASES for iOS Virtual Gamepad Interop:
+      # Cancel-side aliases only. Confirm-side cross-aliases (VK_Z <-> Enter,
+      # VK_C <-> Z, VK_RETURN <-> Z) were removed because they cause false
+      # positives in games that bind Z to a *different* action (Pokemon
+      # Essentials XP's PSystem_Controls maps VK_Z to Input::A "Run"; iOS
+      # Enter would otherwise also flag Input::A and skip the cursor to OK
+      # in name-entry screens).
       unless pressed
-        # If Game checks VK_Z (0x5A) -> Also check Enter (40) and Space (44)
-        if vk_code == 0x5A
-          pressed = (states[40] rescue false) || (states[44] rescue false)
         # If Game checks VK_X (0x58) -> Also check Escape (41)
-        elsif vk_code == 0x58
+        if vk_code == 0x58
           pressed = (states[41] rescue false)
-        # If Game checks VK_RETURN (0x0D) -> Also check Z (29) and Space (44)
-        elsif vk_code == 0x0D
-            pressed = (states[29] rescue false) || (states[44] rescue false)
         # If Game checks VK_ESCAPE (0x1B) -> Also check X (27)
         elsif vk_code == 0x1B
-            pressed = (states[27] rescue false)
-        # If Game checks VK_C (0x43) -> Check Enter(40), Z(29), Space(44)
-        elsif vk_code == 0x43
-          pressed = (states[40] rescue false) || (states[29] rescue false) || (states[44] rescue false)
+          pressed = (states[27] rescue false)
         end
       end
       
