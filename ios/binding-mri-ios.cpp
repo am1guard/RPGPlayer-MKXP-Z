@@ -3865,11 +3865,26 @@ if Object.const_defined?(:MiniFFI)
 else
   puts "[MKXP-Z] MiniFFI class not defined yet, skipping patch"
 end
+
+# ---------- NEW: YEA Debug Extension F10-trap neutralizer ----------
+# Yanfly Engine Ace - Debug Extension hooks Scene_Base#update so that pressing
+# F10 opens an in-game eval window via a Ruby `loop do` that only exits on
+# F10/ESC/ENTER hardware key triggers. On iOS those keys do not exist, and
+# some games ship with the `return unless $TEST` guard commented out, so a
+# spurious F10 trigger at startup permanently freezes the game on Scene_Logo.
+# Neutralize the trap on iOS regardless of $TEST mode.
+if Object.const_defined?(:Scene_Base) && Scene_Base.method_defined?(:trigger_debug_window_entry)
+  puts "[MKXP-Z] Neutralizing Scene_Base#trigger_debug_window_entry (YEA Debug F10 trap, iOS incompatible)"
+  Scene_Base.class_eval do
+    define_method(:trigger_debug_window_entry) { }
+  end
+  puts "[MKXP-Z] [OK] YEA Debug Extension F10 trap neutralized"
+end
 )RUBY";
-                
+
                 int patchState;
                 rb_eval_string_protect(win32apiPatch, &patchState);
-                
+
                 if (patchState) {
                     VALUE exc = rb_errinfo();
                     if (exc != Qnil) {
@@ -4056,6 +4071,15 @@ if Object.const_defined?(:MiniFFI)
   puts "[MKXP-Z] [OK] MiniFFI methods patched"
 else
   puts "[MKXP-Z] MiniFFI class not defined yet, skipping patch"
+end
+
+# ---------- YEA Debug Extension F10-trap neutralizer (fallback path) ----------
+if Object.const_defined?(:Scene_Base) && Scene_Base.method_defined?(:trigger_debug_window_entry)
+  puts "[MKXP-Z] Neutralizing Scene_Base#trigger_debug_window_entry (YEA Debug F10 trap, iOS incompatible)"
+  Scene_Base.class_eval do
+    define_method(:trigger_debug_window_entry) { }
+  end
+  puts "[MKXP-Z] [OK] YEA Debug Extension F10 trap neutralized"
 end
 )RUBY";
                     int patchState;
