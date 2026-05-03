@@ -322,8 +322,6 @@ struct TilemapPrivate
 
 	/* Resources are sufficient and tilemap is ready to be drawn */
 	bool tilemapReady;
-	bool visualDiagAtlasLogged;
-	bool visualDiagBuffersLogged;
 
 	/* Change watches */
 	sigslot::connection tilesetCon;
@@ -359,9 +357,6 @@ struct TilemapPrivate
 	      mapViewportDirty(false),
 	      zOrderDirty(false),
 	      tilemapReady(false),
-	      visualDiagAtlasLogged(false),
-	      visualDiagBuffersLogged(false),
-
 		  opacity(255),
 	      blendType(BlendNormal),
 	      color(&tmp.color),
@@ -685,23 +680,6 @@ struct TilemapPrivate
 			GLMeta::blitEnd();
 		}
 
-		if (!visualDiagAtlasLogged)
-		{
-			visualDiagAtlasLogged = true;
-			fprintf(stderr,
-			        "[MKXP-Z VISUAL DIAG] XP tile atlas: tileset=%dx%d megaSurface=%d atlas=%dx%d efTilesetH=%d animated=%d usableATs=%zu animatedATs=%zu subImageFix=%d maxTex=%d\n",
-			        tileset ? tileset->width() : 0,
-			        tileset ? tileset->height() : 0,
-			        tileset && tileset->megaSurface() ? 1 : 0,
-			        atlas.size.x,
-			        atlas.size.y,
-			        atlas.efTilesetH,
-			        tiles.animated,
-			        atlas.usableATs.size(),
-			        atlas.animatedATs.size(),
-			        shState->config().subImageFix,
-			        glState.caps.maxTexSize);
-		}
 	}
 
 	int samplePriority(int tileInd)
@@ -897,28 +875,6 @@ struct TilemapPrivate
 
 		/* Ensure global IBO size */
 		shState->ensureQuadIBO(quadCount);
-
-		if (!visualDiagBuffersLogged)
-		{
-			visualDiagBuffersLogged = true;
-			fprintf(stderr,
-			        "[MKXP-Z VISUAL DIAG] XP tile buffers: map=%dx%dx%d viewpPos=%d,%d dispPos=%d,%d origin=%d,%d groundQuads=%zu zQuads=%zu zlayersMax=%zu priorities=%d opacity=%d blend=%d\n",
-			        mapData ? mapData->xSize() : 0,
-			        mapData ? mapData->ySize() : 0,
-			        mapData ? mapData->zSize() : 0,
-			        viewpPos.x,
-			        viewpPos.y,
-			        dispPos.x,
-			        dispPos.y,
-			        origin.x,
-			        origin.y,
-			        groundQuadCount,
-			        quadCount - groundQuadCount,
-			        zlayersMax,
-			        priorities ? 1 : 0,
-			        (int) opacity,
-			        (int) blendType);
-		}
 	}
 
 	void bindShader(ShaderBase *&shaderVar)
