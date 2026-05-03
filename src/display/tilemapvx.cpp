@@ -37,6 +37,7 @@
 #include "shader.h"
 #include "tilemap-common.h"
 
+#include <stdio.h>
 #include <vector>
 #include "sigslot/signal.hpp"
 
@@ -91,6 +92,8 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	bool buffersDirty;
 	bool mapViewportDirty;
 	bool firstPrepareNeeded;
+	bool visualDiagAtlasLogged;
+	bool visualDiagBuffersLogged;
 
 	sigslot::connection mapDataCon;
 	sigslot::connection flagsCon;
@@ -132,6 +135,8 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 	      buffersDirty(false),
 	      mapViewportDirty(false),
 	      firstPrepareNeeded(true),
+	      visualDiagAtlasLogged(false),
+	      visualDiagBuffersLogged(false),
 	      above(this, viewport)
 	{
 		memset(bitmaps, 0, sizeof(bitmaps));
@@ -219,6 +224,32 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 
 			Debug() << "Tile atlas dump completed.";
 		}
+
+		if (!visualDiagAtlasLogged)
+		{
+			visualDiagAtlasLogged = true;
+			fprintf(stderr,
+			        "[MKXP-Z VISUAL DIAG] VX tile atlas: atlas=%dx%d hires=%d enableHires=%d atlasScale=%.3f maxTex=%d\n",
+			        atlas.width,
+			        atlas.height,
+			        atlas.selfHires != nullptr,
+			        shState->config().enableHires,
+			        shState->config().atlasScalingFactor,
+			        glState.caps.maxTexSize);
+
+			for (int i = 0; i < BM_COUNT; ++i)
+			{
+				if (nullOrDisposed(bitmaps[i]))
+					continue;
+
+				fprintf(stderr,
+				        "[MKXP-Z VISUAL DIAG] VX tile atlas bitmap[%d]=%dx%d hires=%d\n",
+				        i,
+				        bitmaps[i]->width(),
+				        bitmaps[i]->height(),
+				        bitmaps[i]->hasHires());
+			}
+		}
 	}
 
 	void updateMapViewport()
@@ -282,6 +313,32 @@ struct TilemapVXPrivate : public ViewportElement, TileAtlasVX::Reader
 		VBO::unbind();
 
 		shState->ensureQuadIBO(totalQuads);
+
+		if (!visualDiagBuffersLogged)
+		{
+			visualDiagBuffersLogged = true;
+			fprintf(stderr,
+			        "[MKXP-Z VISUAL DIAG] VX tile buffers: map=%dx%dx%d mapViewp=%d,%d %dx%d dispPos=%d,%d origin=%d,%d sceneRect=%d,%d %dx%d groundQuads=%zu aboveQuads=%zu flags=%d allocQuads=%zu\n",
+			        mapData ? mapData->xSize() : 0,
+			        mapData ? mapData->ySize() : 0,
+			        mapData ? mapData->zSize() : 0,
+			        mapViewp.x,
+			        mapViewp.y,
+			        mapViewp.w,
+			        mapViewp.h,
+			        dispPos.x,
+			        dispPos.y,
+			        origin.x,
+			        origin.y,
+			        sceneGeo.rect.x,
+			        sceneGeo.rect.y,
+			        sceneGeo.rect.w,
+			        sceneGeo.rect.h,
+			        groundQuads,
+			        aboveQuads,
+			        flags ? 1 : 0,
+			        allocQuads);
+		}
 	}
 
 	void prepare()

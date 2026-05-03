@@ -28,6 +28,7 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
 #include <iostream>
 
 #ifndef MKXPZ_BUILD_XCODE
@@ -65,10 +66,26 @@
 
 #ifdef MKXPZ_BUILD_XCODE
 #include "filesystem/filesystem.h"
+static void logShaderLoadIfNeeded(const char *vertName, const char *fragName,
+                                  const std::string &vertBody, const std::string &fragBody)
+{
+    if (strcmp(fragName, "bicubic") != 0)
+        return;
+
+    fprintf(stderr,
+            "[MKXP-Z VISUAL DIAG] Shader load: vert=%s frag=%s vertBytes=%zu fragBytes=%zu antiRinging=%d\n",
+            vertName,
+            fragName,
+            vertBody.length(),
+            fragBody.length(),
+            fragBody.find("sampleMin") != std::string::npos && fragBody.find("clamp(filtered") != std::string::npos);
+}
+
 #define INIT_SHADER(vert, frag, name) \
 { \
     std::string v = mkxp_fs::contentsOfAssetAsString("Shaders/" #vert, "vert"); \
     std::string f = mkxp_fs::contentsOfAssetAsString("Shaders/" #frag, "frag"); \
+    logShaderLoadIfNeeded(#vert, #frag, v, f); \
     Shader::init((const unsigned char*)v.c_str(), v.length(), (const unsigned char*)f.c_str(), f.length(), #vert, #frag, #name); \
 }
 #else

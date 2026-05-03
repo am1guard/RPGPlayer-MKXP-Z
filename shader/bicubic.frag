@@ -22,6 +22,8 @@ void main()
 	vec2 onePixel = texSizeInv;
 	pixel = floor(pixel) * texSizeInv - onePixel / 2.0;
 	vec4 colours[4];
+	vec4 sampleMin = vec4(1.0);
+	vec4 sampleMax = vec4(0.0);
 	// 16 reads, unoptimized but forks for every Mitchell-Netravali filter
 	for(int i = -1; i <= 2; i++)
 	{
@@ -29,6 +31,8 @@ void main()
 		vec4 p1 = texture2D(texture, pixel + vec2(             0, float(i) * onePixel.y)).rgba;
 		vec4 p2 = texture2D(texture, pixel + vec2(    onePixel.x, float(i) * onePixel.y)).rgba;
 		vec4 p3 = texture2D(texture, pixel + vec2(2.0 * onePixel.x, float(i) * onePixel.y)).rgba;
+		sampleMin = min(sampleMin, min(min(p0, p1), min(p2, p3)));
+		sampleMax = max(sampleMax, max(max(p0, p1), max(p2, p3)));
 		colours[i + 1] = ((-bc.x / 6.0 - bc . y) * p0 + (- 1.5 * bc.x - bc.y + 2.0) * p1
 				+ (1.5 * bc.x + bc.y - 2.0) * p2 + (bc.x / 6.0 + bc.y) * p3) * frac3.x
 				+ ((0.5 * bc.x + 2.0 * bc.y) * p0 + (2.0 * bc.x + bc.y - 3.0) * p1
@@ -36,10 +40,11 @@ void main()
 				+ ((-0.5 * bc.x - bc.y) * p0 + (0.5 * bc.x + bc.y) * p2) * frac.x
 				+ p0 * bc.x / 6.0 + (-bc.x / 3.0 + 1.0) * p1 + p2 * bc.x / 6.0;
 	}
-	gl_FragColor = ((-bc.x / 6.0 - bc . y) * colours[0] + (- 1.5 * bc.x - bc.y + 2.0) * colours[1]
+	vec4 filtered = ((-bc.x / 6.0 - bc . y) * colours[0] + (- 1.5 * bc.x - bc.y + 2.0) * colours[1]
 			+ (1.5 * bc.x + bc.y - 2.0) * colours[2] + (bc.x / 6.0 + bc.y) * colours[3]) * frac3.y
 			+ ((0.5 * bc.x + 2.0 * bc.y) * colours[0] + (2.0 * bc.x + bc.y - 3.0) * colours[1]
 			+ (-2.5 * bc.x - 2.0 * bc.y + 3.0) * colours[2] - bc.y * colours[3]) * frac2.y
 			+ ((-0.5 * bc.x - bc.y) * colours[0] + (0.5 * bc.x + bc.y) * colours[2]) * frac.y
 			+ colours[0] * bc.x / 6.0 + (-bc.x / 3.0 + 1.0) * colours[1] + colours[2] * bc.x / 6.0;
+	gl_FragColor = clamp(filtered, sampleMin, sampleMax);
 }

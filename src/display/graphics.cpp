@@ -59,6 +59,7 @@
 
 #include <algorithm>
 #include <errno.h>
+#include <stdio.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <time.h>
@@ -68,6 +69,27 @@
 
 #define DEF_SCREEN_W (rgssVer == 1 ? 640 : 544)
 #define DEF_SCREEN_H (rgssVer == 1 ? 480 : 416)
+
+static const char *mkxpzScaleMethodName(int method)
+{
+    switch (method)
+    {
+    case NearestNeighbor:
+        return "Nearest";
+    case Bilinear:
+        return "Bilinear";
+    case Bicubic:
+        return "Bicubic";
+    case Lanczos3:
+        return "Lanczos3";
+#ifdef MKXPZ_SSL
+    case xBRZ:
+        return "xBRZ";
+#endif
+    default:
+        return "Unknown";
+    }
+}
 
 #define DEF_FRAMERATE (rgssVer == 1 ? 40 : 60)
 
@@ -824,6 +846,7 @@ struct GraphicsPrivate {
     TEXFBO integerScaleBuffer;
     bool integerScaleActive;
     bool integerLastMileScaling;
+    int visualDiagFrameLogs;
     
     std::vector<double> avgFPSData;
     double last_avg_update;
@@ -848,7 +871,8 @@ struct GraphicsPrivate {
     fpsLimiter(frameRate), useFrameSkip(rtData->config.frameSkip), frozen(false),
     last_update(0), last_avg_update(0), backingScaleFactor(1), integerScaleFactor(0, 0),
     integerScaleActive(rtData->config.integerScaling.active),
-    integerLastMileScaling(rtData->config.integerScaling.lastMileScaling) {
+    integerLastMileScaling(rtData->config.integerScaling.lastMileScaling),
+    visualDiagFrameLogs(0) {
         avgFPSData = std::vector<double>();
         avgFPSLock = SDL_CreateMutex();
         glResourceLock = SDL_CreateMutex();
@@ -897,7 +921,7 @@ struct GraphicsPrivate {
             }
         }
         
-        if (integerScaleActive && !integerLastMileScaling) {
+        if (integerScaleActive && !integerLastMileScaling && integerScaleStepApplicable()) {
             scOffset.x = ((winSize.x / 2) - (scRes.x / 2) * integerScaleFactor.x);
             scOffset.y = ((winSize.y / 2) - (scRes.y / 2) * integerScaleFactor.y);
             
@@ -959,7 +983,7 @@ struct GraphicsPrivate {
         if (!integerScaleActive)
             return false;
         
-        if (integerScaleFactor.x < 1 || integerScaleFactor.y < 1) // XXX should be < 2, this is for testing only
+        if (integerScaleFactor.x < 2 || integerScaleFactor.y < 2)
             return false;
         
         return true;
@@ -1061,6 +1085,49 @@ struct GraphicsPrivate {
                               IntRect(scOffset.x, scSize.y+scOffset.y, scSize.x, -scSize.y),
                               !forceNearestNeighbor && GLMeta::smoothScalingMethod(scaleIsSpecial) == Bilinear);
     }
+
+    void logVisualBlitDiag(const char *path, const Vec2i &sourceSize,
+                           const Vec2i &blitSize, int scaleIsSpecial)
+    {
+        if (visualDiagFrameLogs >= 5 && (frameCount % 600) != 0)
+            return;
+
+        ++visualDiagFrameLogs;
+
+        const int method = GLMeta::smoothScalingMethod(scaleIsSpecial);
+        const double scaleX = sourceSize.x > 0 ? (double) scSize.x / sourceSize.x : 0.0;
+        const double scaleY = sourceSize.y > 0 ? (double) scSize.y / sourceSize.y : 0.0;
+        const double drawableScaleX = winSize.x > 0 ? (double) blitSize.x / winSize.x : 0.0;
+        const double drawableScaleY = winSize.y > 0 ? (double) blitSize.y / winSize.y : 0.0;
+        const bool fractional =
+            std::fabs(scaleX - std::round(scaleX)) > 0.001 ||
+            std::fabs(scaleY - std::round(scaleY)) > 0.001;
+
+        fprintf(stderr,
+                "[MKXP-Z VISUAL DIAG] Final blit: path=%s frame=%d source=%dx%d scRes=%dx%d scSize=%dx%d win=%dx%d drawable=%dx%d offset=%d,%d scale=%.4fx%.4f drawableScale=%.4fx%.4f method=%d(%s) scaleIsSpecial=%d smooth=%d smoothDown=%d sharpness=%d integerActive=%d integerStep=%d integerLastMile=%d fixedAspect=%d backing=%.4f fractionalScale=%d\n",
+                path,
+                frameCount,
+                sourceSize.x, sourceSize.y,
+                scRes.x, scRes.y,
+                scSize.x, scSize.y,
+                winSize.x, winSize.y,
+                blitSize.x, blitSize.y,
+                scOffset.x, scOffset.y,
+                scaleX, scaleY,
+                drawableScaleX, drawableScaleY,
+                method,
+                mkxpzScaleMethodName(method),
+                scaleIsSpecial,
+                threadData->config.smoothScaling,
+                threadData->config.smoothScalingDown,
+                threadData->config.bicubicSharpness,
+                integerScaleActive,
+                integerScaleStepApplicable(),
+                integerLastMileScaling,
+                threadData->config.fixedAspectRatio,
+                backingScaleFactor,
+                fractional);
+    }
     
     void redrawScreen() {
         screen.composite();
@@ -1068,8 +1135,9 @@ struct GraphicsPrivate {
         // maybe unspaghetti this later
         if (integerScaleStepApplicable() && !integerLastMileScaling)
         {
-            int scaleIsSpecial = GLMeta::blitScaleIsSpecial(integerScaleBuffer, false, IntRect(0, 0, scSize.x, scSize.y), screen.getPP().frontBuffer(), IntRect(0, 0, scRes.x, scRes.y));
+            const int scaleIsSpecial = SameScale;
 
+            logVisualBlitDiag("integer-direct", scRes, winSize, scaleIsSpecial);
             GLMeta::blitBeginScreen(winSize, scaleIsSpecial);
             GLMeta::blitSource(screen.getPP().frontBuffer(), scaleIsSpecial);
             
@@ -1100,7 +1168,9 @@ struct GraphicsPrivate {
 
         Vec2i sourceSize;
 
-        if (integerScaleActive)
+        const bool useIntegerScaleBuffer = integerScaleStepApplicable();
+
+        if (useIntegerScaleBuffer)
         {
             sourceSize = Vec2i(integerScaleBuffer.width, integerScaleBuffer.height);
         }
@@ -1109,7 +1179,7 @@ struct GraphicsPrivate {
             sourceSize = scRes;
         }
 
-        int scaleIsSpecial = GLMeta::blitScaleIsSpecial(integerScaleBuffer, false, IntRect(0, 0, scSize.x, scSize.y), integerScaleActive ? integerScaleBuffer : screen.getPP().frontBuffer(), IntRect(0, 0, sourceSize.x, sourceSize.y));
+        int scaleIsSpecial = GLMeta::blitScaleIsSpecial(integerScaleBuffer, false, IntRect(0, 0, scSize.x, scSize.y), useIntegerScaleBuffer ? integerScaleBuffer : screen.getPP().frontBuffer(), IntRect(0, 0, sourceSize.x, sourceSize.y));
 
         // iOS FIX: Ensure correct physical viewport size & Reset Scissor
         int drW, drH;
@@ -1124,8 +1194,9 @@ struct GraphicsPrivate {
 
         GLMeta::blitBeginScreen(blitSize, scaleIsSpecial);
         //GLMeta::blitSource(screen.getPP().frontBuffer(), scaleIsSpecial);
+        logVisualBlitDiag(useIntegerScaleBuffer ? "integer-buffer" : "screen", sourceSize, blitSize, scaleIsSpecial);
 
-        if (integerScaleActive)
+        if (useIntegerScaleBuffer)
         {
             GLMeta::blitSource(integerScaleBuffer, scaleIsSpecial);
         }
