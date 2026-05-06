@@ -696,8 +696,11 @@ static void mriBindingInit() {
         "  \n"
         "  def self.included(base)\n"
         "    base.class_eval do\n"
-        "      # Store original method_missing if it exists\n"
-        "      if method_defined?(:method_missing) && !method_defined?(:__mkxpz_original_method_missing__)\n"
+        "      # Store original method_missing if it exists.\n"
+        "      # method_missing is intrinsically private, so check both kinds.\n"
+        "      if (method_defined?(:method_missing) || private_method_defined?(:method_missing)) && \n"
+        "         !method_defined?(:__mkxpz_original_method_missing__) && \n"
+        "         !private_method_defined?(:__mkxpz_original_method_missing__)\n"
         "        alias_method :__mkxpz_original_method_missing__, :method_missing\n"
         "      end\n"
         "      \n"
@@ -708,6 +711,12 @@ static void mriBindingInit() {
         "            return send(method_name, *args, &block)\n"
         "          end\n"
         "        end\n"
+        "        # Defensive nil[X] short-circuit: Pokemon Essentials Multi Save plugin\n"
+        "        # does `slot.match(/Partida (\\\\d+)/)[1]`; when match returns nil, the\n"
+        "        # subsequent `nil[1]` reaches here. Without this guard, super falls\n"
+        "        # through to BasicObject#method_missing and raises NoMethodError\n"
+        "        # before Correction.rb's outer safety-net rescue can mask it.\n"
+        "        return nil if self.nil? && method_name == :[]\n"
         "        # Call original method_missing or raise NoMethodError\n"
         "        if respond_to?(:__mkxpz_original_method_missing__, true)\n"
         "          __mkxpz_original_method_missing__(method_name, *args, &block)\n"
@@ -747,7 +756,73 @@ static void mriBindingInit() {
         Debug() << "Warning: Could not install private method visibility fix";
         rb_errinfo();
     }
-    
+
+    // Array#[] nil-index tolerance at C-level so the patch is active even if
+    // Correction.rb (preloadScript) fails to load for a given game. Pokemon
+    // Indigo's pause menu does `path[$player.gender]` where the gender index
+    // can be nil for non-binary character variants (e.g. black male) and the
+    // raw C-level Array#[] raises TypeError before reaching any Ruby-level
+    // safety net. Same `__mkxpz_orig_aref` alias name used in Correction.rb;
+    // if Correction.rb later runs its `unless Array.method_defined?(:...)`
+    // guard skips re-installation.
+    rb_eval_string_protect(
+        "unless Array.method_defined?(:__mkxpz_orig_aref)\n"
+        "  class Array\n"
+        "    alias_method :__mkxpz_orig_aref, :[]\n"
+        "    def [](*args)\n"
+        "      __mkxpz_orig_aref(*args)\n"
+        "    rescue TypeError => e\n"
+        "      return nil if args.length == 1 && args[0].nil?\n"
+        "      msg = e.message.to_s.downcase\n"
+        "      return nil if msg.include?('nil') && msg.include?('integer')\n"
+        "      raise\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        &state);
+
+    if (state == 0) {
+        Debug() << "Array#[] nil-index tolerance installed at C-level";
+    } else {
+        Debug() << "Warning: Could not install Array#[] nil-index tolerance";
+        rb_errinfo();
+    }
+
+    // Bitmap.new missing-file fallback at C-level. Same defensive rationale
+    // as the Array#[] patch above: Correction.rb has a richer Bitmap recovery
+    // (fuzzy NFC/NFD match + Levenshtein), but if the preloadScript fails to
+    // load for a given game the C-level fallback still prevents Errno::ENOENT
+    // from escaping. Pokemon Indigo's PauseMenuDP plugin builds bitmap paths
+    // via `"Graphics/Pictures/DP Pause Menu/#{path}"` where `path` becomes nil
+    // for non-binary character variants — interpolating nil yields a trailing
+    // slash, Bitmap.new raises, the entire pause menu cannot open. With this
+    // patch the bitmap silently becomes a 32x32 dummy and the menu draws.
+    rb_eval_string_protect(
+        // Public marker prevents double-install (Ruby's `initialize` is private,
+        // so `method_defined?(:__mkxpz_c_orig_bitmap_init)` always returns false
+        // for an aliased private method — would recursively re-alias and cause
+        // infinite recursion on the second load).
+        "unless Bitmap.method_defined?(:__mkxpz_has_c_bitmap_fallback)\n"
+        "  class Bitmap\n"
+        "    def __mkxpz_has_c_bitmap_fallback; true; end\n"
+        "    alias_method :__mkxpz_c_orig_bitmap_init, :initialize\n"
+        "    def initialize(*args)\n"
+        "      __mkxpz_c_orig_bitmap_init(*args)\n"
+        "    rescue Errno::ENOENT\n"
+        "      $stderr.puts \"[MKXP-Z] Bitmap fallback: missing file '#{args.first}', using 32x32 dummy.\" rescue nil\n"
+        "      __mkxpz_c_orig_bitmap_init(32, 32)\n"
+        "    end\n"
+        "  end\n"
+        "end\n",
+        &state);
+
+    if (state == 0) {
+        Debug() << "Bitmap.new missing-file fallback installed at C-level";
+    } else {
+        Debug() << "Warning: Could not install Bitmap.new missing-file fallback";
+        rb_errinfo();
+    }
+
     // Stub RGSS Linker and other Windows-specific DLL scripts
     // Some games use: require 'RGSS Linker' which fails on iOS
     // This marks the library as loaded and patches require to handle it
