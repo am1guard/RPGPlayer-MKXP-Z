@@ -3299,6 +3299,30 @@ static std::string fixSpecificScriptErrors(const std::string &script, const char
         }
     }
 
+    // Yeeters / DataObjects empty char-class fix
+    // Source script contains: line.split(/\d+[]]/)
+    // Ruby (Prism) parses [] as an empty char-class followed by stray ], which is
+    // a syntax error. Author intent was to match a digit followed by ']'.
+    // Replace the literal "/\d+[]]/" byte sequence with "/\d+\]/".
+    if (sName.find("Yeeters") != std::string::npos) {
+        try {
+            const std::string badRegex = "/\\d+[]]/";
+            const std::string goodRegex = "/\\d+\\]/";
+            size_t pos = 0;
+            bool replaced = false;
+            while ((pos = result.find(badRegex, pos)) != std::string::npos) {
+                result.replace(pos, badRegex.length(), goodRegex);
+                pos += goodRegex.length();
+                replaced = true;
+            }
+            if (replaced) {
+                Debug() << "[MKXP-Z] SYNTAX FIX: Replaced empty char-class regex /\\d+[]]/ with /\\d+\\]/ in script '" << scriptName << "'";
+            }
+        } catch (const std::exception& e) {
+            Debug() << "[MKXP-Z] Yeeters empty char-class fix error: " << e.what();
+        }
+    }
+
     return result;
 }
 
