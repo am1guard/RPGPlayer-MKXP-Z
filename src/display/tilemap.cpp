@@ -29,10 +29,6 @@
 #include "config.h"
 #include "debugwriter.h"
 
-// EXTRALOG: bypass g_mkxpz_log_level gate — Release iphoneos build siler Debug() çıktısını.
-// std::cerr'a doğrudan yazıp her satırı flush ediyoruz; LogManager stderr'i yakalayıp .log dosyasına ekler.
-#include <cstdio>
-#define EXTRALOG_CERR(streamargs) do { std::cerr << "[EXTRALOG][Tilemap] " streamargs << std::endl; std::cerr.flush(); } while(0)
 #include "glstate.h"
 #include "gl-util.h"
 #include "gl-meta.h"
@@ -349,12 +345,6 @@ struct TilemapPrivate
 
 	EtcTemps tmp;
 
-	// EXTRALOG: per-instance counters for forensic logs (coord-offset bug)
-	int extralogId;
-	int extralogSetOXCount;
-	int extralogSetOYCount;
-	int extralogUpdateViewportCount;
-
 	TilemapPrivate(Viewport *viewport)
 	    : viewport(viewport),
 	      tileset(0),
@@ -371,16 +361,8 @@ struct TilemapPrivate
 		  opacity(255),
 	      blendType(BlendNormal),
 	      color(&tmp.color),
-	      tone(&tmp.tone),
-	      extralogId(0),
-	      extralogSetOXCount(0),
-	      extralogSetOYCount(0),
-	      extralogUpdateViewportCount(0)
+	      tone(&tmp.tone)
 	{
-		// EXTRALOG: assign unique id per Tilemap instance for cross-log correlation
-		static int s_extralogNextId = 0;
-		extralogId = ++s_extralogNextId;
-		EXTRALOG_CERR("ctor id=" << extralogId << " viewport=" << (viewport ? "set" : "nil"));
 		memset(autotiles, 0, sizeof(autotiles));
 
 		atlas.animatedATs.reserve(autotileCount);
@@ -1040,23 +1022,6 @@ struct TilemapPrivate
 		}
 
 		dispPos = elem.sceneGeo.rect.pos() - wrap(combOrigin, 32);
-
-		// EXTRALOG: pinpoint coord-offset bug — log how origin maps to viewpPos and dispPos
-		++extralogUpdateViewportCount;
-		if (extralogUpdateViewportCount <= 10 || (extralogUpdateViewportCount % 240) == 0)
-		{
-			EXTRALOG_CERR("updateMapViewport id=" << extralogId
-			        << " call=" << extralogUpdateViewportCount
-			        << " origin=(" << origin.x << "," << origin.y << ")"
-			        << " sceneGeo.orig=(" << elem.sceneGeo.orig.x << "," << elem.sceneGeo.orig.y << ")"
-			        << " sceneGeo.rect=(" << elem.sceneGeo.rect.x << "," << elem.sceneGeo.rect.y
-			        << " " << elem.sceneGeo.rect.w << "x" << elem.sceneGeo.rect.h << ")"
-			        << " combOrigin=(" << combOrigin.x << "," << combOrigin.y << ")"
-			        << " viewpPos=(" << viewpPos.x << "," << viewpPos.y << ")"
-			        << " dispPos=(" << dispPos.x << "," << dispPos.y << ")"
-			        << " mapW=" << (mapData ? mapData->xSize() : -1)
-			        << " mapH=" << (mapData ? mapData->ySize() : -1));
-		}
 	}
 
 	void prepare()
@@ -1426,17 +1391,6 @@ void Tilemap::setOX(int value)
 {
 	guardDisposed();
 
-	// EXTRALOG: log every ox set arrival in C++, including no-op cases (helps detect missing updates)
-	++p->extralogSetOXCount;
-	if (p->extralogSetOXCount <= 10 || (p->extralogSetOXCount % 240) == 0)
-	{
-		EXTRALOG_CERR("setOX id=" << p->extralogId
-		        << " call=" << p->extralogSetOXCount
-		        << " value=" << value
-		        << " current=" << p->origin.x
-		        << " no_op=" << (p->origin.x == value ? 1 : 0));
-	}
-
 	if (p->origin.x == value)
 		return;
 
@@ -1447,17 +1401,6 @@ void Tilemap::setOX(int value)
 void Tilemap::setOY(int value)
 {
 	guardDisposed();
-
-	// EXTRALOG: log every oy set arrival
-	++p->extralogSetOYCount;
-	if (p->extralogSetOYCount <= 10 || (p->extralogSetOYCount % 240) == 0)
-	{
-		EXTRALOG_CERR("setOY id=" << p->extralogId
-		        << " call=" << p->extralogSetOYCount
-		        << " value=" << value
-		        << " current=" << p->origin.y
-		        << " no_op=" << (p->origin.y == value ? 1 : 0));
-	}
 
 	if (p->origin.y == value)
 		return;
