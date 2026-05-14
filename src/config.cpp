@@ -112,16 +112,29 @@ json::value readConfFile(const char *path) {
     
     try {
         std::string cfg = mkxp_fs::contentsOfFileAsString(path);
-        ret = json::parse5(Encoding::convertString(cfg));
+        fprintf(stderr, "[MKXP-Z Config] readConfFile - %s loaded into memory (%zu bytes)\n",
+                path, cfg.length());
+        std::string converted = Encoding::convertString(cfg);
+        fprintf(stderr, "[MKXP-Z Config] readConfFile - encoding pass complete (post-convert %zu bytes)\n",
+                converted.length());
+        ret = json::parse5(converted);
         fprintf(stderr, "[MKXP-Z Config] ✅ Config file parsed successfully\n");
     }
     catch (const std::exception &e) {
-        fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse %s: %s\n", path, e.what());
+        fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse %s (std::exception: %s): %s\n",
+                path, typeid(e).name(), e.what());
         Debug() << "Failed to parse" << path << ":" << e.what();
     }
     catch (const Exception &e) {
-        fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse %s: Unknown encoding\n", path);
-        Debug() << "Failed to parse" << path << ":" << "Unknown encoding";
+        // Surface the actual mkxp Exception message rather than the misleading
+        // generic "Unknown encoding" string we used to print. This made it
+        // impossible to tell whether the failure came from
+        // `Encoding::getCharset` (uchardet empty) or `Encoding::convertString`
+        // (iconv conversion error) when diagnosing the Pokemon Anil/Indigo
+        // silent preloadScript drop.
+        fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse %s (mkxp Exception type=%d): %s\n",
+                path, (int)e.type, e.msg.c_str());
+        Debug() << "Failed to parse" << path << ":" << e.msg.c_str();
     }
     
     if (!ret.is_object())
