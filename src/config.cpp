@@ -100,25 +100,16 @@ bool getEnvironmentBool(const char *env, bool defaultValue) {
 json::value readConfFile(const char *path) {
     
     json::value ret(0);
-    
-    fprintf(stderr, "[MKXP-Z Config] Looking for config file: %s\n", path);
-    
+
     if (!mkxp_fs::fileExists(path)) {
-        fprintf(stderr, "[MKXP-Z Config] ❌ Config file NOT FOUND: %s\n", path);
+        fprintf(stderr, "[MKXP-Z Config] Config file NOT FOUND: %s\n", path);
         return json::object({});
     }
-    
-    fprintf(stderr, "[MKXP-Z Config] ✅ Config file found: %s\n", path);
-    
+
     try {
         std::string cfg = mkxp_fs::contentsOfFileAsString(path);
-        fprintf(stderr, "[MKXP-Z Config] readConfFile - %s loaded into memory (%zu bytes)\n",
-                path, cfg.length());
         std::string converted = Encoding::convertString(cfg);
-        fprintf(stderr, "[MKXP-Z Config] readConfFile - encoding pass complete (post-convert %zu bytes)\n",
-                converted.length());
         ret = json::parse5(converted);
-        fprintf(stderr, "[MKXP-Z Config] ✅ Config file parsed successfully\n");
     }
     catch (const std::exception &e) {
         fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse %s (std::exception: %s): %s\n",
@@ -408,11 +399,7 @@ bool Config::fontIsSolid(const char *fontName) const {
 }
 
 void Config::readGameINI() {
-    fprintf(stderr, "[MKXP-Z Config] readGameINI() called\n");
-    fprintf(stderr, "[MKXP-Z Config] execName = '%s'\n", execName.c_str());
-    
     if (!customScript.empty()) {
-        fprintf(stderr, "[MKXP-Z Config] Using custom script: %s\n", customScript.c_str());
         game.title = customScript.c_str();
         
         if (rgssVersion == 0)
@@ -424,40 +411,35 @@ void Config::readGameINI() {
     }
     
     std::string iniFileName(execName + ".ini");
-    fprintf(stderr, "[MKXP-Z Config] Looking for INI file: %s\n", iniFileName.c_str());
-    
+
     SDLRWStream iniFile(iniFileName.c_str(), "r");
-    
+
     bool convSuccess = false;
     if (iniFile)
     {
-        fprintf(stderr, "[MKXP-Z Config] ✅ INI file opened successfully: %s\n", iniFileName.c_str());
         INIConfiguration ic;
         if (ic.load(iniFile.stream()))
         {
             GUARD(game.title = ic.getStringProperty("Game", "Title"););
             GUARD(game.scripts = ic.getStringProperty("Game", "Scripts"););
-            
+
             strReplace(game.scripts, '\\', '/');
-            
-            fprintf(stderr, "[MKXP-Z Config] Game.Title = '%s'\n", game.title.c_str());
-            fprintf(stderr, "[MKXP-Z Config] Game.Scripts = '%s'\n", game.scripts.c_str());
-            
+
             if (game.title.empty()) {
-                fprintf(stderr, "[MKXP-Z Config] ⚠️ Could not find Game.Title in %s\n", iniFileName.c_str());
+                fprintf(stderr, "[MKXP-Z Config] Could not find Game.Title in %s\n", iniFileName.c_str());
                 Debug() << iniFileName + ": Could not find Game.Title";
             }
-            
+
             if (game.scripts.empty()) {
-                fprintf(stderr, "[MKXP-Z Config] ❌ Could not find Game.Scripts in %s\n", iniFileName.c_str());
+                fprintf(stderr, "[MKXP-Z Config] Could not find Game.Scripts in %s\n", iniFileName.c_str());
                 Debug() << iniFileName + ": Could not find Game.Scripts";
             }
         } else {
-            fprintf(stderr, "[MKXP-Z Config] ❌ Failed to parse INI file: %s\n", iniFileName.c_str());
+            fprintf(stderr, "[MKXP-Z Config] Failed to parse INI file: %s\n", iniFileName.c_str());
         }
     }
     else {
-        fprintf(stderr, "[MKXP-Z Config] ❌ INI file NOT FOUND: %s\n", iniFileName.c_str());
+        fprintf(stderr, "[MKXP-Z Config] INI file NOT FOUND: %s\n", iniFileName.c_str());
         Debug() << "Could not read" << iniFileName;
     }
     

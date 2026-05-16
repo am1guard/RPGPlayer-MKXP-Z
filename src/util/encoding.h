@@ -46,8 +46,6 @@ static std::string getCharset(std::string &str) {
 static std::string convertString(std::string &str) {
 
     std::string charset = getCharset(str);
-    fprintf(stderr, "[MKXP-Z Encoding] convertString called - input_len: %zu, detected_charset: '%s'\n",
-            str.length(), charset.c_str());
 
     // Conversion doesn't need to happen if it's already UTF-8
     if (!strcmp(charset.c_str(), "UTF-8") || !strcmp(charset.c_str(), "ASCII")) {

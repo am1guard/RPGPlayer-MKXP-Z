@@ -3473,7 +3473,7 @@ RB_METHOD_GUARD(mkxpPreprocessRubyScript) {
 
     // Distinguish between plugin and folder scripts based on name/context if needed
     if (name != "(eval)") {
-        fprintf(stderr, "[MKXP-Z] Dynamically loaded script [%ld]: %s\n", dynamic_script_count, name.c_str());
+        // Removed verbose per-script load log to prevent spam in games with many plugins.
     } else {
         // Only log small preview of eval block to prevent giant logs.
         // Dedup by preview content: the same event command/movement
@@ -3702,16 +3702,12 @@ static void runRMXPScripts(BacktraceData &btData) {
         rb_ary_store(script, 3, rb_utf8_str_new_cstr(processedScript.c_str()));
     }
     
-    fprintf(stderr, "[MKXP-Z] ========== ARCHIVE SCRIPT LOADING COMPLETE ==========\n");
-    fprintf(stderr, "[MKXP-Z] Total archive scripts loaded: %ld\n", scriptCount);
-    
     /* Execute preloaded scripts */
     for (std::vector<std::string>::const_iterator i = conf.preloadScripts.begin();
          i != conf.preloadScripts.end(); ++i)
     {
         if (shState->rtData().rqTerm)
             break;
-        fprintf(stderr, "[MKXP-Z] Running preload script: %s\n", i->c_str());
         runCustomScript(*i);
     }
     
@@ -3721,7 +3717,6 @@ static void runRMXPScripts(BacktraceData &btData) {
         return;
     }
     
-    fprintf(stderr, "[MKXP-Z] ========== STARTING MAIN SCRIPT EXECUTION ==========\n");
     while (true) {
         for (long i = 0; i < scriptCount; ++i) {
             if (shState->rtData().rqTerm) {
@@ -3790,17 +3785,13 @@ static void runRMXPScripts(BacktraceData &btData) {
              */
             
             int state;
-            
-            // VERBOSE LOGGING: Log every script
-            fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Executing: %s\n", i, scriptCount, scriptName);
-            
+
             // ================================================================
             // WIN32API POSTLOAD PATCH - Run before Main script
             // This patches GetAsyncKeyState/GetKeyState to use Input.raw_key_states
             // which allows virtual gamepad input to be detected by games using Win32 API
             // ================================================================
             if (strcmp(scriptName, "Main") == 0) {
-                fprintf(stderr, "[MKXP-Z] Applying Win32API GetAsyncKeyState postload patch...\n");
                 
                 const char* win32apiPatch = R"RUBY(
 # Win32API GetAsyncKeyState/GetKeyState Postload Patch
@@ -3989,19 +3980,14 @@ end
                         fprintf(stderr, "[MKXP-Z] Win32API patch error: %s\n", StringValueCStr(msg));
                         rb_set_errinfo(Qnil);
                     }
-                } else {
-                    fprintf(stderr, "[MKXP-Z] Win32API postload patch applied successfully\n");
                 }
             }
-            
-            
+
+
             evalString(string, fname, &state);
-            
+
             if (state == 0) {
-                // Script executed successfully
-                if (i < 10 || i == scriptCount - 1 || i % 20 == 0) {
-                    fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✓ Success: %s\n", i, scriptCount, scriptName);
-                }
+                // Script executed successfully (per-script success log removed to avoid spam)
                 
                 // ================================================================
                 // WIN32API POSTLOAD PATCH
@@ -4013,10 +3999,8 @@ end
                 // Check if we should patch
                 if (!win32api_patched) {
                     if (strcmp(scriptName, "Win32API") == 0) {
-                        fprintf(stderr, "[MKXP-Z] Win32API script execution detected - Applying patch...\n");
                         should_patch = true;
                     } else if (strcmp(scriptName, "Main") == 0) {
-                        fprintf(stderr, "[MKXP-Z] Main script detected (Win32API not patched yet) - Applying patch...\n");
                         should_patch = true;
                     }
                 }
@@ -4180,14 +4164,7 @@ end
                     rb_eval_string_protect(win32apiPatch, &patchState);
                     if (!patchState) {
                         win32api_patched = true;
-                        fprintf(stderr, "[MKXP-Z] Win32API postload patch applied successfully\n");
                     }
-                }
-                
-                // Special logging for Main script
-                if (strcmp(scriptName, "Main") == 0) {
-                    fprintf(stderr, "[MKXP-Z] ========== MAIN SCRIPT FINISHED ==========\n");
-                    fprintf(stderr, "[MKXP-Z] Game loop has ended normally.\n");
                 }
             }
             
@@ -4326,29 +4303,21 @@ end
                 break;
             }
         }
-        
-        fprintf(stderr, "[MKXP-Z] ========== SCRIPT EXECUTION LOOP COMPLETE ==========\n");
-        
+
         VALUE exc = rb_gv_get("$!");
         if (exc != Qnil) {
             VALUE excClass = rb_class_name(rb_obj_class(exc));
             fprintf(stderr, "[MKXP-Z] Post-loop exception: %s\n", StringValueCStr(excClass));
         }
-        
+
         if (rb_obj_class(exc) != getRbData()->exc[Reset]) {
-            fprintf(stderr, "[MKXP-Z] Breaking main loop (not a Reset exception)\n");
             break;
         }
-        
+
         if (processReset(false)) {
-            fprintf(stderr, "[MKXP-Z] processReset returned true, breaking\n");
             break;
         }
-        
-        fprintf(stderr, "[MKXP-Z] Reset processed, restarting script loop...\n");
     }
-    
-    fprintf(stderr, "[MKXP-Z] ========== EXITING runRMXPScripts ==========\n");
 }
 
 // =============================================================================

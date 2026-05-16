@@ -32,6 +32,7 @@
 #include "sharedstate.h"
 
 #include <physfs.h>
+#include <cstdlib> // for getenv (MKXPZ_VERBOSE_FS toggle)
 
 #include <algorithm>
 #include <ctype.h>
@@ -738,7 +739,12 @@ openReadEnumCB(void *d, const char *dirpath, const char *filename) {
     data.stopSearching = true;
 
   ++data.matchCount;
-  fprintf(stderr, "[MKXP-Z] openRead Found: '%s' (requested: '%s')\n", fullPath, filename);
+  // Verbose per-file lookup log; gated behind MKXPZ_VERBOSE_FS env var to
+  // avoid flooding the log on every successful asset open (Pokemon Reborn
+  // etc. open thousands of files per session and this drowns real errors).
+  static const bool verboseFS = getenv("MKXPZ_VERBOSE_FS") != nullptr;
+  if (verboseFS)
+    fprintf(stderr, "[MKXP-Z] openRead Found: '%s' (requested: '%s')\n", fullPath, filename);
   return PHYSFS_ENUM_OK;
 }
 
@@ -802,14 +808,6 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
 
       if (stripGraphicsLocaleSuffix(file, strippedFilename) &&
           tryOpenReadInSameDirectory(handler, p, dir, strippedFilename.c_str())) {
-        if (*dir) {
-          fprintf(stderr,
-                  "[MKXP-Z] Graphics locale fallback: '%s' -> '%s/%s'\n",
-                  filename, dir, strippedFilename.c_str());
-        } else {
-          fprintf(stderr, "[MKXP-Z] Graphics locale fallback: '%s' -> '%s'\n",
-                  filename, strippedFilename.c_str());
-        }
         return;
       }
     }
@@ -841,7 +839,6 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
                        const char *ext = findExt(mixedPath.c_str());
                        
                        if (data.handler.tryRead(data.ops, ext)) {
-                           fprintf(stderr, "[MKXP-Z] Global Fallback SUCCESS: Redirected '%s' -> '%s'\n", filename, mixedPath.c_str());
                            return;
                        }
                        
@@ -899,7 +896,10 @@ void FileSystem::openReadRaw(SDL_RWops &ops, const char *filename,
     throw Exception(Exception::NoFileError, "%s", filename);
   }
 
-  fprintf(stderr, "[MKXP-Z] openReadRaw Success: '%s' -> '%s' (normalized: '%s')\n", filename, resolvedPath, normalizedPath.c_str());
+  // Verbose per-file open log; gated to avoid drowning the log.
+  static const bool verboseRaw = getenv("MKXPZ_VERBOSE_FS") != nullptr;
+  if (verboseRaw)
+    fprintf(stderr, "[MKXP-Z] openReadRaw Success: '%s' -> '%s' (normalized: '%s')\n", filename, resolvedPath, normalizedPath.c_str());
 
   initReadOps(handle, ops, freeOnClose);
     return;
@@ -913,21 +913,14 @@ std::string FileSystem::normalize(const char *pathname, bool preferred,
 bool FileSystem::exists(const char *filename) {
   std::string normalized = normalize(filename, false, false);
   int result = PHYSFS_exists(normalized.c_str());
-  fprintf(stderr, "[MKXP-Z] FileSystem::exists('%s') -> normalized='%s' -> PHYSFS_exists=%d\n", 
-          filename, normalized.c_str(), result);
-  
-  // Also log the search path for debugging
-  static bool searchPathLogged = false;
-  if (!searchPathLogged) {
-    char **searchPath = PHYSFS_getSearchPath();
-    fprintf(stderr, "[MKXP-Z] PHYSFS search paths:\n");
-    for (char **i = searchPath; *i != NULL; i++) {
-      fprintf(stderr, "  - %s\n", *i);
-    }
-    PHYSFS_freeList(searchPath);
-    searchPathLogged = true;
-  }
-  
+  // Per-call existence log is extremely noisy (called for every asset probe);
+  // gate behind MKXPZ_VERBOSE_FS. The one-time search-path dump still fires
+  // on first call regardless so we keep that diagnostic.
+  static const bool verboseExists = getenv("MKXPZ_VERBOSE_FS") != nullptr;
+  if (verboseExists)
+    fprintf(stderr, "[MKXP-Z] FileSystem::exists('%s') -> normalized='%s' -> PHYSFS_exists=%d\n",
+            filename, normalized.c_str(), result);
+
   return result != 0;
 }
 

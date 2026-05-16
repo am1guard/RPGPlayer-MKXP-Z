@@ -540,9 +540,7 @@ RGSS_openRead(void *opaque, const char *filename)
         }
 
 		return 0;
-	} else {
-        fprintf(stderr, "[MKXP-Z-RGSS] Request: '%s' -> FOUND in archive\n", filename);
-    }
+	}
 
 	RGSS_entryHandle *entry =
 	        new RGSS_entryHandle(data->entryHash[lowercaseName], data->archiveIo);
