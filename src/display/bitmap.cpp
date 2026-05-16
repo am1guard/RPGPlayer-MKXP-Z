@@ -342,6 +342,84 @@ struct BitmapPrivate
         return result != PIXMAN_REGION_OUT;
     }
     
+    // iOS FIX: For "mega" bitmaps (image larger than GL_MAX_TEXTURE_SIZE)
+    // we lazily upload a downscaled GPU texture so they remain renderable
+    // as sprites. Without this, p->gl.tex stays at 0 (no GL texture) and
+    // a Sprite using a mega bitmap renders as solid black squares — exactly
+    // what Pokemon Essentials Thunder battle animations show on iOS where
+    // glState.caps.maxTexSize is 4096 and the move's panorama PNG is taller.
+    // The mega surface itself is preserved so the existing blt-from-mega
+    // CPU paths (TileWrap autotiling, etc.) keep working unchanged.
+    void ensureMegaBacking()
+    {
+        if (!megaSurface)
+            return;
+        if (gl.tex != TEX::ID(0))
+            return; // backing already created
+
+        int maxSize = glState.caps.maxTexSize;
+        if (maxSize <= 0)
+            maxSize = 4096;
+
+        const int origW = megaSurface->w;
+        const int origH = megaSurface->h;
+        if (origW <= 0 || origH <= 0)
+            return;
+
+        double scale = std::min(1.0,
+                                std::min((double)maxSize / origW,
+                                         (double)maxSize / origH));
+        int scaledW = std::max(1, (int)(origW * scale));
+        int scaledH = std::max(1, (int)(origH * scale));
+
+        SDL_Surface *scaledSurf = SDL_CreateRGBSurface(
+            0, scaledW, scaledH,
+            megaSurface->format->BitsPerPixel,
+            megaSurface->format->Rmask,
+            megaSurface->format->Gmask,
+            megaSurface->format->Bmask,
+            megaSurface->format->Amask);
+        if (!scaledSurf) {
+            fprintf(stderr,
+                    "[MKXP-Z] ensureMegaBacking: SDL_CreateRGBSurface failed: %s\n",
+                    SDL_GetError());
+            return;
+        }
+
+        SDL_SetSurfaceBlendMode(megaSurface, SDL_BLENDMODE_NONE);
+        int err = SDL_SoftStretchLinear(megaSurface, NULL, scaledSurf, NULL);
+        if (err != 0) {
+            // Fallback to nearest-neighbour scaled blit
+            SDL_Rect dstRect = { 0, 0, scaledW, scaledH };
+            err = SDL_LowerBlitScaled(megaSurface, NULL, scaledSurf, &dstRect);
+        }
+        if (err != 0) {
+            fprintf(stderr,
+                    "[MKXP-Z] ensureMegaBacking: scaling failed: %s\n",
+                    SDL_GetError());
+            SDL_FreeSurface(scaledSurf);
+            return;
+        }
+
+        try {
+            gl = shState->texPool().request(scaledW, scaledH);
+        } catch (const Exception &e) {
+            fprintf(stderr,
+                    "[MKXP-Z] ensureMegaBacking: texPool request failed (%dx%d)\n",
+                    scaledW, scaledH);
+            SDL_FreeSurface(scaledSurf);
+            return;
+        }
+
+        TEX::bind(gl.tex);
+        TEX::uploadImage(gl.width, gl.height, scaledSurf->pixels, GL_RGBA);
+        SDL_FreeSurface(scaledSurf);
+
+        fprintf(stderr,
+                "[MKXP-Z] Mega bitmap %dx%d backed by scaled GPU texture %dx%d for sprite rendering\n",
+                origW, origH, gl.width, gl.height);
+    }
+
     void bindTexture(ShaderBase &shader, bool substituteLoresSize = true)
     {
         if (selfHires) {
@@ -359,9 +437,24 @@ struct BitmapPrivate
             shader.setTexSize(Vec2i(cframe.width, cframe.height));
             return;
         }
+
+        // iOS FIX: lazy-create a scaled GPU backing for mega bitmaps so
+        // sprites don't render as black squares. See ensureMegaBacking().
+        if (megaSurface && gl.tex == TEX::ID(0)) {
+            ensureMegaBacking();
+        }
+
         TEX::bind(gl.tex);
         if (selfLores && substituteLoresSize) {
             shader.setTexSize(Vec2i(selfLores->width(), selfLores->height()));
+        }
+        else if (megaSurface && gl.tex != TEX::ID(0)) {
+            // The bound texture is a downscaled copy of the mega surface.
+            // Vertex UVs from the caller are expressed in the original mega
+            // coordinate space (srcRect uses mega width/height), so tell the
+            // shader the logical size is the mega size — UVs then map cleanly
+            // onto [0,1] over the scaled tex and we render the right pixels.
+            shader.setTexSize(Vec2i(megaSurface->w, megaSurface->h));
         }
         else {
             shader.setTexSize(Vec2i(gl.width, gl.height));
@@ -3103,8 +3196,14 @@ void Bitmap::releaseResources()
         delete p->selfHires;
     }
 
-    if (p->megaSurface)
+    if (p->megaSurface) {
         SDL_FreeSurface(p->megaSurface);
+        // iOS FIX: a mega bitmap may also hold a lazily-created scaled GPU
+        // backing (see BitmapPrivate::ensureMegaBacking). Release it too so
+        // the texture pool entry isn't leaked when the bitmap is disposed.
+        if (p->gl.tex != TEX::ID(0))
+            shState->texPool().release(p->gl);
+    }
     else if (p->animation.enabled) {
         p->animation.enabled = false;
         p->animation.playing = false;
