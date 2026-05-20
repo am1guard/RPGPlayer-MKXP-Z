@@ -54,9 +54,260 @@
 #include <math.h>
 #include <algorithm>
 #include <vector>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <list>
+#include <unordered_map>
 
 extern "C" {
 #include "libnsgif/libnsgif.h"
+}
+
+/* === Text-render Bitmap LRU cache ====================================
+ * Pokemon Essentials menulerinde ayni UI label'lari ('Yes', 'BGM Volume',
+ * 'Save on Heal' vs.) her frame yeniden render edilip GL'e upload ediliyor.
+ * Bu cache (font_ptr, outline_size, style, color, str) anahtariyla daha
+ * onceden uretilmis Bitmap*'i tutar; cache hit'te TTF_Render + ensureFormat
+ * + new Bitmap + texPool.request + glTexImage2D + applyShadow + blendText
+ * tum yolu atlanir.
+ *
+ * Capacity: 256 entry. Ortalama 200x32 px ABGR8888 -> ~6.5 MB texpool.
+ * Pokemon menulerinde benzersiz label seti < 100 oldugundan LRU baski
+ * uygulanmiyor; cache hot kaliyor.
+ *
+ * Thread-safety: tum Bitmap text ops Ruby thread'inden tek seri akista
+ * geliyor; non-atomic counters ve std container'lar guvenli.
+ * ===================================================================== */
+namespace {
+    /* Key kullanir TTF_Font* pointer (SharedFontState fontlari yalnizca
+     * shutdown'da kapatir, pointer'lar oturum boyunca stabil). Outline icin
+     * pointer yerine integer kullaniyoruz: cache hit'te getSdlFont(outline)
+     * hic cagrilmiyor. */
+    struct TextCacheKey {
+        uintptr_t font_ptr;
+        int  outline_size;
+        std::string str;
+        int  style;               /* bold|italic bits */
+        bool solid;
+        bool shadow;
+        uint32_t color;           /* packed RGBA, post outline-adjust */
+        uint32_t out_color;       /* 0 if no outline */
+
+        bool operator==(const TextCacheKey &o) const {
+            return font_ptr     == o.font_ptr     &&
+                   outline_size == o.outline_size &&
+                   style        == o.style        &&
+                   solid        == o.solid        &&
+                   shadow       == o.shadow       &&
+                   color        == o.color        &&
+                   out_color    == o.out_color    &&
+                   str          == o.str;
+        }
+    };
+
+    struct TextCacheKeyHash {
+        size_t operator()(const TextCacheKey &k) const {
+            size_t h = std::hash<std::string>{}(k.str);
+            h ^= (size_t)k.font_ptr    + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2);
+            h ^= ((size_t)(uint32_t)k.outline_size << 11);
+            h ^= ((size_t)(uint32_t)k.style << 9);
+            h ^= (k.solid ? 0x1ULL : 0) ^ (k.shadow ? 0x2ULL : 0);
+            h ^= ((size_t)k.color * 0x100000001b3ULL) ^ (size_t)k.out_color;
+            return h;
+        }
+    };
+
+    struct TextCacheEntry {
+        Bitmap *bitmap;       /* OWNED; deleted on eviction/clear */
+        int alignment_w;
+        int alignment_h;
+    };
+
+    using TextCacheList = std::list<std::pair<TextCacheKey, TextCacheEntry>>;
+    static TextCacheList g_textCache;
+    static std::unordered_map<TextCacheKey, TextCacheList::iterator, TextCacheKeyHash> g_textCacheIndex;
+
+    static const size_t TEXT_CACHE_MAX = 1024;
+    /* Pokemon menulerinde frame basina ~500 char-render var. 256 cap doluyor
+     * ve her frame ~20 entry evict ediliyor; 1024 ile cache pressure sifira
+     * iniyor (~25MB GPU memory bedeli — modern iOS cihazlar icin trivial). */
+
+    static uint64_t g_textCacheHits = 0;
+    static uint64_t g_textCacheMisses = 0;
+
+    /* Fast-blit state memoization (frame-scoped).
+     * Pokemon menulerinde consecutive drawText'ler ayni dest Bitmap'e
+     * gider; FBO::boundFramebufferID degismediyse bindFBO atlanabilir.
+     * Source texture pointer ayni ise TEX::bind + setTexSize atlanabilir.
+     * Uniform sets (setTexOffsetX=0, setTranslation=0) sabit oldugundan
+     * SimpleShader bound iken bir kez yapilir. Frame boundary'de invalidate. */
+    static uintptr_t g_lastFastBlitDestFboGl = 0;  /* 0 = invalid */
+    static uintptr_t g_lastFastBlitSrcTexGl  = 0;
+    static bool      g_simpleShaderUniformsInited = false;
+    /* Blend state defaults zaten true + BlendNormal (glstate.cpp line 141-142);
+     * her drawText'te push+pop yapmak gereksiz stack ops. Frame-once init et
+     * (baska bir kod yolu degistirdiyse zorla resync), sonra calls skip eder. */
+    static bool      g_fastBlitBlendStateInited = false;
+
+    static inline uint32_t packColor(const SDL_Color &c) {
+        return ((uint32_t)c.r << 24) | ((uint32_t)c.g << 16) |
+               ((uint32_t)c.b << 8)  |  (uint32_t)c.a;
+    }
+
+    static TextCacheEntry *textCacheGet(const TextCacheKey &k) {
+        auto it = g_textCacheIndex.find(k);
+        if (it == g_textCacheIndex.end())
+            return nullptr;
+        g_textCache.splice(g_textCache.begin(), g_textCache, it->second);
+        return &(it->second->second);
+    }
+
+    static void textCacheEvictOne() {
+        auto &lru = g_textCache.back();
+        g_textCacheIndex.erase(lru.first);
+        delete lru.second.bitmap;
+        g_textCache.pop_back();
+    }
+
+    static void textCachePut(const TextCacheKey &k, Bitmap *bm, int aw, int ah) {
+        while (g_textCache.size() >= TEXT_CACHE_MAX)
+            textCacheEvictOne();
+        g_textCache.emplace_front(k, TextCacheEntry{bm, aw, ah});
+        g_textCacheIndex[k] = g_textCache.begin();
+    }
+}
+
+extern "C" void mkxpz_textcache_clear()
+{
+    for (auto &p : g_textCache)
+        delete p.second.bitmap;
+    g_textCache.clear();
+    g_textCacheIndex.clear();
+    g_textCacheHits = 0;
+    g_textCacheMisses = 0;
+}
+
+/* === [TEXTPERF] diagnostic instrumentation ============================
+ * Pokemon Essentials tab-switch stutter teshisi icin per-frame text-render
+ * sayaclarini tutar; Graphics::update sonunda esik asilirsa stderr'e yazar.
+ * Bypass: g_mkxpz_log_level'i gozardi eder cunku amac issue reproduction
+ * sirasinda kesin sayilari yakalamak.
+ * ===================================================================== */
+namespace {
+    struct TextPerfFrameState {
+        uint32_t drawText_calls = 0;
+        uint64_t drawText_us = 0;
+        uint32_t textSize_calls = 0;
+        uint64_t textSize_us = 0;
+        uint32_t ttfRender_calls = 0;
+        uint64_t ttfRender_us = 0;
+        uint32_t ttfMeasure_calls = 0;
+        uint32_t ttfSize_calls = 0;
+        uint32_t hangulScan_calls = 0;
+        uint32_t getSdlFont_calls = 0;
+        uint64_t slowest_drawText_us = 0;
+        char     slowest_drawText_str[96] = {0};
+        uint32_t frame_index = 0;
+    };
+    static TextPerfFrameState g_textperf;
+
+    static inline uint64_t now_us() {
+        using namespace std::chrono;
+        return (uint64_t)duration_cast<microseconds>(
+            steady_clock::now().time_since_epoch()).count();
+    }
+
+    /* RAII scope timer; on destruction adds elapsed us to the given counter
+     * and increments the call counter. */
+    struct ScopeTimer {
+        uint64_t  start;
+        uint32_t *count;
+        uint64_t *us_total;
+        ScopeTimer(uint32_t *c, uint64_t *u) : start(now_us()), count(c), us_total(u) {}
+        ~ScopeTimer() {
+            uint64_t elapsed = now_us() - start;
+            (*count)++;
+            (*us_total) += elapsed;
+        }
+    };
+
+    /* Variant that also tracks slowest-call string for drawText. */
+    struct DrawTextTimer {
+        uint64_t start;
+        const char *str;
+        DrawTextTimer(const char *s) : start(now_us()), str(s) {}
+        ~DrawTextTimer() {
+            uint64_t elapsed = now_us() - start;
+            g_textperf.drawText_calls++;
+            g_textperf.drawText_us += elapsed;
+            if (elapsed > g_textperf.slowest_drawText_us) {
+                g_textperf.slowest_drawText_us = elapsed;
+                if (str) {
+                    size_t cap = sizeof(g_textperf.slowest_drawText_str) - 1;
+                    std::strncpy(g_textperf.slowest_drawText_str, str, cap);
+                    g_textperf.slowest_drawText_str[cap] = '\0';
+                } else {
+                    g_textperf.slowest_drawText_str[0] = '\0';
+                }
+            }
+        }
+    };
+}
+
+/* C-linkage entry point so Graphics::update can flush per-frame stats
+ * without pulling in C++ headers. */
+extern "C" void mkxpz_textperf_flush_frame()
+{
+    g_textperf.frame_index++;
+
+    const uint64_t text_total_us = g_textperf.drawText_us + g_textperf.textSize_us;
+    const uint32_t text_total_calls = g_textperf.drawText_calls + g_textperf.textSize_calls;
+
+    /* Esikler — bunlardan herhangi biri asilirsa frame loglanir.
+     * Pokemon menu tab-switch'leri tipik olarak 60+ draw_text + 10+ ms uretir. */
+    const bool over_time = text_total_us >= 5000;       /* >= 5 ms text-render */
+    const bool over_calls = text_total_calls >= 30;     /* yogun frame */
+    const bool slow_outlier = g_textperf.slowest_drawText_us >= 2000; /* tek call >= 2ms */
+
+    if (over_time || over_calls || slow_outlier) {
+        /* Bypass g_mkxpz_log_level: bu bir teshis logu, default ERROR seviyesinde
+         * bile gorunmesi gerekiyor. */
+        std::fprintf(stderr,
+            "[TEXTPERF] frame=%u draw=%u/%lluus size=%u/%lluus "
+            "render=%u/%lluus measure=%u sizeUtf=%u hangul=%u getFont=%u "
+            "cacheHits=%llu/%llu cacheSize=%zu slowest=%lluus '%s'\n",
+            g_textperf.frame_index,
+            g_textperf.drawText_calls,
+            (unsigned long long)g_textperf.drawText_us,
+            g_textperf.textSize_calls,
+            (unsigned long long)g_textperf.textSize_us,
+            g_textperf.ttfRender_calls,
+            (unsigned long long)g_textperf.ttfRender_us,
+            g_textperf.ttfMeasure_calls,
+            g_textperf.ttfSize_calls,
+            g_textperf.hangulScan_calls,
+            g_textperf.getSdlFont_calls,
+            (unsigned long long)g_textCacheHits,
+            (unsigned long long)(g_textCacheHits + g_textCacheMisses),
+            g_textCache.size(),
+            (unsigned long long)g_textperf.slowest_drawText_us,
+            g_textperf.slowest_drawText_str);
+        std::fflush(stderr);
+    }
+
+    /* Reset per-frame counters but keep monotonic frame_index */
+    uint32_t fi = g_textperf.frame_index;
+    g_textperf = TextPerfFrameState{};
+    g_textperf.frame_index = fi;
+
+    /* Invalidate fast-blit state cache at frame boundary — between frames,
+     * Graphics::redrawScreen and other render passes change GL state
+     * unpredictably. Frame-scoped memoization is safe; cross-frame is not. */
+    g_lastFastBlitDestFboGl = 0;
+    g_lastFastBlitSrcTexGl = 0;
+    g_simpleShaderUniformsInited = false;
+    g_fastBlitBlendStateInited = false;
 }
 
 #define GUARD_MEGA \
@@ -2424,8 +2675,9 @@ static SDL_Surface *renderUTF8WithHangulFallbackSpacing(TTF_Font *font,
 
 void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 {
+    DrawTextTimer __textperf_dt(str);
     guardDisposed();
-    
+
     GUARD_MEGA;
     GUARD_ANIMATED;
     
@@ -2537,187 +2789,341 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         }
     }
     int doubleOutlineSize = scaledOutlineSize * 2;
-    
-    // Use the output of textSize to determine squeezing, since textSize tends to be used to determine
-    // rect dimensions.
-    // Also use it to determine position, because freetype sometimes treats the last character as
-    // being a pixel wider than it should be, and which textSize is currently set to compensate for.
-    int alignmentWidth, alignmentHeight;
-    {
-        const IntRect &text_size = textSize(str);
-        alignmentWidth = text_size.w;
-        alignmentHeight = text_size.h;
-        
-        if (!alignmentWidth)
-            return;
-    }
-    
-    // Trim the text to only fill double the rect width
-    int charLimit = 0;
     float squeezeLimit = 0.5f;
-    if (TTF_MeasureUTF8(sdlFont, str, std::min(width() - rect.x, rect.w) / squeezeLimit, nullptr, &charLimit) == 0)
-    {
-        if (charLimit != fixed.size())
+
+    /* === Text-render Bitmap LRU cache lookup ===
+     * Anahtar (font_ptr, outline_size, style, solid, shadow, color, out_color, str).
+     * Hit'te alignmentWidth/Height ile birlikte pre-rendered Bitmap* aliyoruz;
+     * tum TTF_Render + ensureFormat + applyShadow + outline render + blendText +
+     * new Bitmap(...) yolu atlaniyor. Sadece final stretchBlt cagrisi calisiyor. */
+    TextCacheKey cacheKey;
+    cacheKey.font_ptr    = (uintptr_t)sdlFont;
+    cacheKey.outline_size = scaledOutlineSize;
+    cacheKey.style       = (p->font->getBold()   ? 0x1 : 0) |
+                           (p->font->getItalic() ? 0x2 : 0);
+    cacheKey.solid       = p->font->isSolid();
+    cacheKey.shadow      = p->font->getShadow();
+    cacheKey.color       = packColor(c);    /* c may have been outline-adjusted above */
+    cacheKey.out_color   = scaledOutlineSize ? packColor(co) : 0;
+    cacheKey.str         = fixed;            /* pre-trim; trimmed renders won't be cached */
+
+    Bitmap *renderedBitmap = nullptr;        /* Owned by cache; never delete here. */
+    int alignmentWidth = 0, alignmentHeight = 0;
+
+    TextCacheEntry *cacheHit = textCacheGet(cacheKey);
+    if (cacheHit) {
+        g_textCacheHits++;
+        renderedBitmap = cacheHit->bitmap;
+        alignmentWidth = cacheHit->alignment_w;
+        alignmentHeight = cacheHit->alignment_h;
+    } else {
+        g_textCacheMisses++;
+
+        /* --- Original render path (only runs on cache miss) --- */
+
+        /* alignment metrics */
         {
-            /* TTF_MeasureUTF8 returns the charLimit in codepoints, not bytes,
-             * so we have to calculate where that limit is ourselves.
-             * Grabbing a few codepoints past the limit in case the next
-             * character is a multi codepoint character.*/
-            charLimit += 4;
-            for(std::string::iterator it=fixed.begin(); it!=fixed.end() && *it != '\0'; ++it)
+            const IntRect &text_size = textSize(str);
+            alignmentWidth = text_size.w;
+            alignmentHeight = text_size.h;
+
+            if (!alignmentWidth)
+                return;
+        }
+
+        /* Trim the text to only fill double the rect width */
+        int charLimit = 0;
+        bool didTrim = false;
+        g_textperf.ttfMeasure_calls++;
+        if (TTF_MeasureUTF8(sdlFont, str, std::min(width() - rect.x, rect.w) / squeezeLimit, nullptr, &charLimit) == 0)
+        {
+            if (charLimit != (int)fixed.size())
             {
-                /* The first byte of a multibyte character starts with the first
-                 * two bits set to 11, with subsequent bytes starting with 10.
-                 * Single byte characters start with 0.*/
-                if ((*it & 0xC0) != 0x80)
+                /* TTF_MeasureUTF8 returns the charLimit in codepoints, not bytes,
+                 * so we have to calculate where that limit is ourselves.
+                 * Grabbing a few codepoints past the limit in case the next
+                 * character is a multi codepoint character.*/
+                charLimit += 4;
+                for(std::string::iterator it=fixed.begin(); it!=fixed.end() && *it != '\0'; ++it)
                 {
-                    if (charLimit-- == 0)
+                    if ((*it & 0xC0) != 0x80)
                     {
-                        *it = '\0';
-                        break;
+                        if (charLimit-- == 0)
+                        {
+                            *it = '\0';
+                            didTrim = true;
+                            break;
+                        }
                     }
                 }
+                /* refresh c-str pointer in case of trim */
+                str = fixed.c_str();
             }
         }
-    }
-    
-    SDL_Surface *txtSurf;
-    const bool useHangulFallbackSpacing = needsHangulFallbackSpacing(p->font, str);
 
-    if (useHangulFallbackSpacing)
-        txtSurf = renderUTF8WithHangulFallbackSpacing(sdlFont, str, c, p->font->isSolid(), 1);
-    else
-        txtSurf = nullptr;
+        SDL_Surface *txtSurf;
+        g_textperf.hangulScan_calls++;
+        const bool useHangulFallbackSpacing = needsHangulFallbackSpacing(p->font, str);
 
-    if (!txtSurf)
-    {
-        if (p->font->isSolid())
-            txtSurf = TTF_RenderUTF8_Solid(sdlFont, str, c);
+        if (useHangulFallbackSpacing)
+            txtSurf = renderUTF8WithHangulFallbackSpacing(sdlFont, str, c, p->font->isSolid(), 1);
         else
-            txtSurf = TTF_RenderUTF8_Blended(sdlFont, str, c);
-    }
-    
-    if (!txtSurf)
-        throw Exception(Exception::SDLError, "Error creating text: %s",
-                        SDL_GetError());
-    
-    p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
-    
-    if (p->font->getShadow())
-    {
-        int scaledShadowSize = 1;
-        if (p->selfLores) {
-            scaledShadowSize = scaledShadowSize * width() / p->selfLores->width();
+            txtSurf = nullptr;
+
+        if (!txtSurf)
+        {
+            uint64_t __rt0 = now_us();
+            if (p->font->isSolid())
+                txtSurf = TTF_RenderUTF8_Solid(sdlFont, str, c);
+            else
+                txtSurf = TTF_RenderUTF8_Blended(sdlFont, str, c);
+            g_textperf.ttfRender_calls++;
+            g_textperf.ttfRender_us += (now_us() - __rt0);
         }
 
-        applyShadow(txtSurf, *p->format, c, scaledShadowSize);
+        if (!txtSurf)
+            throw Exception(Exception::SDLError, "Error creating text: %s",
+                            SDL_GetError());
+
+        p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
+
+        if (p->font->getShadow())
+        {
+            int scaledShadowSize = 1;
+            if (p->selfLores) {
+                scaledShadowSize = scaledShadowSize * width() / p->selfLores->width();
+            }
+
+            applyShadow(txtSurf, *p->format, c, scaledShadowSize);
+        }
+
+        /* squeeze (needed for outline inRect math below) */
+        float squeeze_local = (float) rect.w / alignmentWidth;
+        squeeze_local = clamp(squeeze_local, squeezeLimit, 1.0f);
+
+        if (scaledOutlineSize)
+        {
+            SDL_Surface *outline;
+            TTF_Font *sdlOutline;
+            try {
+                sdlOutline = p->font->getSdlFont(scaledOutlineSize);
+            } catch (const Exception &e) {
+                SDL_FreeSurface(txtSurf);
+                throw e;
+            }
+            if (useHangulFallbackSpacing)
+                outline = renderUTF8WithHangulFallbackSpacing(sdlOutline, str, co, p->font->isSolid(), 1);
+            else
+                outline = nullptr;
+
+            if (!outline)
+            {
+                uint64_t __rt1 = now_us();
+                if (p->font->isSolid())
+                    outline = TTF_RenderUTF8_Solid(sdlOutline, str, co);
+                else
+                    outline = TTF_RenderUTF8_Blended(sdlOutline, str, co);
+                g_textperf.ttfRender_calls++;
+                g_textperf.ttfRender_us += (now_us() - __rt1);
+            }
+
+            if (!outline) {
+                SDL_FreeSurface(txtSurf);
+                throw Exception(Exception::SDLError, "Error creating text outline: %s",
+                                SDL_GetError());
+            }
+
+            p->ensureFormat(outline, SDL_PIXELFORMAT_ABGR8888);
+
+            int outlineCropUndo = shState->config().fontOutlineCrop ? 0 : scaledOutlineSize;
+
+            SDL_Rect inRect = {scaledOutlineSize - outlineCropUndo, scaledOutlineSize - outlineCropUndo,
+                               std::min<int>({(int)(rect.w / squeeze_local) - doubleOutlineSize,
+                                              txtSurf->w - scaledOutlineSize,
+                                              outline->w - doubleOutlineSize
+                                             }) + outlineCropUndo,
+                               std::min<int>({rect.h - doubleOutlineSize,
+                                              txtSurf->h - scaledOutlineSize,
+                                              outline->h - doubleOutlineSize
+                                             }) + outlineCropUndo};
+            SDL_Rect outRect = {doubleOutlineSize - outlineCropUndo, doubleOutlineSize - outlineCropUndo, 0, 0};
+
+            blendText(txtSurf, inRect, c, outline, outRect, co, p->font->getShadow());
+            SDL_FreeSurface(txtSurf);
+            txtSurf = outline;
+        }
+
+        /* Wrap final surface in heap Bitmap (takes ownership of txtSurf).
+         * forceMega=false: kucuk text yuzeyleri normal GPU texture path'ine
+         * gidiyor (initFromSurface'te tek bir glTexImage2D ile yuklenip
+         * persistent kaliyor). Cache hit'te stretchBlt fast path'i devrede:
+         * GLMeta::blitSource(source.getGLTypes()) -> source'un kendi GL
+         * texture'ini kullanir, CPU->GPU upload yok. (forceMega=true verseydik
+         * stretchBlt'in mega kolu her cagrida TEX::uploadSubImage yapardi,
+         * cache faydasini sifirlardi.) Text surface'i maxTexSize'i asarsa
+         * initFromSurface zaten otomatik olarak mega path'ine gecer. */
+        Bitmap *bm = new Bitmap(txtSurf, nullptr, false);
+
+        if (didTrim) {
+            /* Trim depends on rect.w; don't pollute cache. Caller frees with us. */
+            renderedBitmap = bm;
+            /* Mark as "self-owned" via a tiny lambda trick: we'll delete after blit. */
+        } else {
+            textCachePut(cacheKey, bm, alignmentWidth, alignmentHeight);
+            renderedBitmap = bm;
+        }
+        /* --- end render path --- */
     }
-    
+
+    /* === Common alignment + blit path (both hit and miss) === */
     int alignX = rect.x;
-    
+
     switch (align)
     {
         default:
         case Left :
             break;
-            
+
         case Center :
-            // Yes, half of the outline size.
             alignX += (rect.w - (alignmentWidth + scaledOutlineSize)) / 2;
             break;
-            
+
         case Right :
-            // I don't know why it's double the outline size, but it is.
             alignX += rect.w - alignmentWidth - doubleOutlineSize;
             break;
     }
-    
+
     if (alignX < rect.x)
         alignX = rect.x;
-    
+
     int alignY = rect.y + ((rect.h - alignmentHeight) / 2) - scaledOutlineSize;
-    
     alignY = std::max(alignY, rect.y);
-    
-    /* FIXME: RGSS begins squeezing the text before it fills the rect.
-     * While this is extremely undesirable, a number of games will understandably
-     * have made the rects bigger to compensate, so we should probably match it */
+
     float squeeze = (float) rect.w / alignmentWidth;
-    
     squeeze = clamp(squeeze, squeezeLimit, 1.0f);
 
-    if (scaledOutlineSize)
-    {
-        SDL_Surface *outline;
-        TTF_Font *sdlOutline;
-        try {
-            sdlOutline = p->font->getSdlFont(scaledOutlineSize);
-        } catch (const Exception &e) {
-            SDL_FreeSurface(txtSurf);
-            throw e;
-        }
-        if (useHangulFallbackSpacing)
-            outline = renderUTF8WithHangulFallbackSpacing(sdlOutline, str, co, p->font->isSolid(), 1);
-        else
-            outline = nullptr;
-
-        if (!outline)
-        {
-            if (p->font->isSolid())
-                outline = TTF_RenderUTF8_Solid(sdlOutline, str, co);
-            else
-                outline = TTF_RenderUTF8_Blended(sdlOutline, str, co);
-        }
-        
-        if (!outline) {
-            SDL_FreeSurface(txtSurf);
-            throw Exception(Exception::SDLError, "Error creating text outline: %s",
-                            SDL_GetError());
-        }
-        
-        p->ensureFormat(outline, SDL_PIXELFORMAT_ABGR8888);
-
-        // Enterbrain's runtime crops the top row and left column of the text
-        // when blitting it onto the outline. We allow the user to optionally
-        // disable this cropping, since it's arguably quite ugly.
-        int outlineCropUndo = shState->config().fontOutlineCrop ? 0 : scaledOutlineSize;
-
-        /* outline should always be at least doubleOutlineSize bigger than txtSurf,
-         * but we may as well validate it here anyway. */
-        SDL_Rect inRect = {scaledOutlineSize - outlineCropUndo, scaledOutlineSize - outlineCropUndo,
-                           std::min<int>({(int)(rect.w / squeeze) - doubleOutlineSize,
-                                          txtSurf->w - scaledOutlineSize,
-                                          outline->w - doubleOutlineSize
-                                         }) + outlineCropUndo,
-                           std::min<int>({rect.h - doubleOutlineSize,
-                                          txtSurf->h - scaledOutlineSize,
-                                          outline->h - doubleOutlineSize
-                                         }) + outlineCropUndo};
-        SDL_Rect outRect = {doubleOutlineSize - outlineCropUndo, doubleOutlineSize - outlineCropUndo, 0, 0};
-        
-        blendText(txtSurf, inRect, c, outline, outRect, co, p->font->getShadow());
-        SDL_FreeSurface(txtSurf);
-        txtSurf = outline;
-    }
-    
     IntRect destRect(alignX, alignY,
-                    std::min(rect.w, (int)(txtSurf->w * squeeze)),
-                    txtSurf->h);  // Use actual surface height, not rect.h which is based on TTF_FontHeight
-    
+                    std::min(rect.w, (int)(renderedBitmap->width() * squeeze)),
+                    renderedBitmap->height());
+
     destRect.w = std::min(destRect.w, width() - destRect.x);
     destRect.h = std::min(destRect.h, height() - destRect.y);
-    
+
     IntRect sourceRect(scaledOutlineSize, scaledOutlineSize, destRect.w / squeeze, destRect.h);
-    
-    Bitmap txtBitmap(txtSurf, nullptr, true);
+
     bool smooth = squeeze != 1.0f;
-    stretchBlt(destRect, txtBitmap, sourceRect, 255, smooth);
+
+    /* === Fast text blit ===
+     * stretchBlt'in opacity<255||touchesTaintedArea slow path'i her cagrida
+     * dest-to-gpTexFBO copy + bitmapBlit shader draw (2 GL pass) yapar.
+     * Pokemon Essentials Window contents Bitmap'leri ilk text draw'undan
+     * sonra her zaman tainted olur, slow path'e duser. Bu bypass:
+     * SimpleShader + hardware GL BlendNormal (glBlendFuncSeparate SRC_ALPHA,
+     * ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA) ile **tek draw call**.
+     *
+     * Onkosullar: dest mega degil (drawText basinda recursive yola gidiyor);
+     * source mega degil (forceMega=false ile olusturduk); selfHires yok
+     * (nullptr ile constructed). Bu kosullar saglanmazsa stretchBlt'e fallback.
+     *
+     * Gorsel: bitmapBlit shader'in (uniform-driven dst alpha tracking)
+     * formulu yerine standart GL BlendNormal kullaniliyor. Sonuc dest.alpha
+     * < 1 olan piksel sayisi cok az oldugu surece (Pokemon menu BG'leri
+     * opak) gozle ayird edilemez. Window contents dest yuzeyleri tipik
+     * olarak BG resmi cizdikten sonra alpha=1, sonra metin tepelerine bu
+     * koruyarak yazilir. */
+    bool useFastBlit = renderedBitmap->p->gl.tex != TEX::ID(0) &&
+                       !renderedBitmap->p->megaSurface &&
+                       !p->megaSurface &&
+                       !p->animation.enabled &&
+                       !hasHires();
+
+    if (useFastBlit) {
+        SimpleShader &shader = shState->shaders().simple;
+        shader.bind();  /* memoized via glState.program */
+
+        const uintptr_t destFboGl = (uintptr_t)p->gl.fbo.gl;
+        const uintptr_t srcTexGl  = (uintptr_t)renderedBitmap->p->gl.tex.gl;
+
+        /* === FBO bind memoization ===
+         * Pokemon menu icindeki ardisik drawText'ler ayni dest Bitmap'e
+         * gidiyor. FBO::boundFramebufferID son glBindFramebuffer'i izliyor;
+         * bizim dest FBO'muzla esitse bind atlamak guvenli (idempotent). */
+        const bool fboAlreadyBound =
+            (destFboGl != 0) &&
+            (destFboGl == g_lastFastBlitDestFboGl) &&
+            (destFboGl == (uintptr_t)FBO::boundFramebufferID.gl);
+
+        if (!fboAlreadyBound) {
+            p->bindFBO();
+            g_lastFastBlitDestFboGl = destFboGl;
+            /* FBO changed -> shader uniforms might be stale wrt viewport,
+             * tex bind cache invalidated (other ops could have run). */
+            g_lastFastBlitSrcTexGl = 0;
+            g_simpleShaderUniformsInited = false;
+        }
+
+        /* Viewport push uses memoized GLProperty — if size same, no GL call. */
+        glState.viewport.pushSet(IntRect(0, 0, p->gl.width, p->gl.height));
+        shader.applyViewportProj();  /* projMat.set memoized via GLProperty */
+
+        /* setTexOffsetX(0) ve setTranslation(0) bizim fast blit kullanim
+         * sekli icin sabit; SimpleShader bound iken bir kez set yeter. */
+        if (!g_simpleShaderUniformsInited) {
+            shader.setTexOffsetX(0);
+            shader.setTranslation(Vec2i());
+            g_simpleShaderUniformsInited = true;
+        }
+
+        /* === TEX bind memoization ===
+         * Source tex pointer ayni ise TEX::bind + setTexSize atlanabilir
+         * (uniform per-program ve SimpleShader korunuyor). */
+        if (srcTexGl != g_lastFastBlitSrcTexGl) {
+            renderedBitmap->p->bindTexture(shader, false);
+            g_lastFastBlitSrcTexGl = srcTexGl;
+        }
+
+        Quad &quad = shState->gpQuad();
+        quad.setTexPosRect(sourceRect, destRect);
+
+        /* Blend state: frame-once init. Defaults (true + BlendNormal) zaten
+         * dogru; per-call push+pop yapmak gereksiz stack ops + memoized GL
+         * set cagrisi. Once-init et, sonraki call'lar skip eder. */
+        if (!g_fastBlitBlendStateInited) {
+            glState.blend.set(true);
+            glState.blendMode.set(BlendNormal);
+            g_fastBlitBlendStateInited = true;
+        }
+
+        if (smooth) TEX::setSmooth(true);
+        quad.draw();
+        if (smooth) TEX::setSmooth(false);
+
+        glState.viewport.pop();
+
+        p->addTaintedArea(destRect);
+        p->onModified();
+    } else {
+        stretchBlt(destRect, *renderedBitmap, sourceRect, 255, smooth);
+        /* stretchBlt path'i kendi GL state degisikliklerini yapiyor;
+         * fast blit cache'imizi invalidate et. */
+        g_lastFastBlitDestFboGl = 0;
+        g_lastFastBlitSrcTexGl = 0;
+        g_simpleShaderUniformsInited = false;
+        g_fastBlitBlendStateInited = false;
+    }
+
+    /* Non-cached (trimmed) bitmap: delete after blit. Otherwise cache owns it. */
+    if (!cacheHit && !g_textCacheIndex.count(cacheKey)) {
+        /* Means we did not call textCachePut → trimmed path. */
+        delete renderedBitmap;
+    }
 }
 
 IntRect Bitmap::textSize(const char *str)
 {
+    ScopeTimer __textperf_ts(&g_textperf.textSize_calls, &g_textperf.textSize_us);
     guardDisposed();
-    
+
     GUARD_MEGA;
     GUARD_ANIMATED;
     
@@ -2734,7 +3140,9 @@ IntRect Bitmap::textSize(const char *str)
     std::string fixed = fixedBase + " ";
     
     int w, h;
+    g_textperf.ttfSize_calls++;
     TTF_SizeUTF8(sdlFont, fixed.c_str(), &w, &h);
+    g_textperf.hangulScan_calls++;
     const bool useHangulFallbackSpacing = needsHangulFallbackSpacing(p->font, fixedBase.c_str());
 
     if (useHangulFallbackSpacing)
@@ -2749,6 +3157,7 @@ IntRect Bitmap::textSize(const char *str)
     else
     {
         int ws;
+        g_textperf.ttfSize_calls++;
         TTF_SizeUTF8(sdlFont, " ", &ws, 0);
         w -= ws;
     }
