@@ -161,6 +161,70 @@ static void registerStaticRubyExtensions(const StaticRubyExtension *extensions, 
     }
 }
 
+static bool mkxpRubyValueSupportsClassLookup(VALUE value) {
+    if (value == Qundef) {
+        return false;
+    }
+
+#if RAPI_FULL > 187
+    if (!RB_SPECIAL_CONST_P(value)) {
+#ifdef T_IMEMO
+        if (RB_TYPE_P(value, T_IMEMO)) {
+            return false;
+        }
+#endif
+#ifdef T_NONE
+        if (RB_TYPE_P(value, T_NONE)) {
+            return false;
+        }
+#endif
+#ifdef T_MOVED
+        if (RB_TYPE_P(value, T_MOVED)) {
+            return false;
+        }
+#endif
+#ifdef T_ZOMBIE
+        if (RB_TYPE_P(value, T_ZOMBIE)) {
+            return false;
+        }
+#endif
+    }
+#endif
+
+    return true;
+}
+
+static bool mkxpRubyValueIsClassOrModule(VALUE value) {
+    if (!mkxpRubyValueSupportsClassLookup(value)) {
+        return false;
+    }
+
+    return RB_TYPE_P(value, T_CLASS) ||
+           RB_TYPE_P(value, T_MODULE)
+#ifdef T_ICLASS
+           || RB_TYPE_P(value, T_ICLASS)
+#endif
+           ;
+}
+
+static bool mkxpRubyObjIsKindOfSafe(VALUE obj, VALUE klass) {
+    if (!mkxpRubyValueSupportsClassLookup(obj) ||
+        !mkxpRubyValueIsClassOrModule(klass)) {
+        return false;
+    }
+
+    return RTEST(rb_obj_is_kind_of(obj, klass));
+}
+
+static bool mkxpRubyObjClassEqualsSafe(VALUE obj, VALUE klass) {
+    if (!mkxpRubyValueSupportsClassLookup(obj) ||
+        !mkxpRubyValueIsClassOrModule(klass)) {
+        return false;
+    }
+
+    return rb_obj_class(obj) == klass;
+}
+
 static void initStaticRubyEncodingsForIOS() {
     static bool encodingsInitialized = false;
     if (encodingsInitialized) {
@@ -213,10 +277,12 @@ static void initStaticRubyEncodingsForIOS() {
     VALUE err = rb_errinfo();
     if (NIL_P(err)) {
         Debug() << "Warning: Static Ruby encoding bootstrap sanity check failed";
-    } else {
+    } else if (mkxpRubyObjIsKindOfSafe(err, rb_eException)) {
         VALUE msg = rb_funcall(err, rb_intern("message"), 0);
         Debug() << "Warning: Static Ruby encoding bootstrap sanity check failed:"
                 << StringValueCStr(msg);
+    } else {
+        Debug() << "Warning: Static Ruby encoding bootstrap sanity check failed with non-exception errinfo";
     }
     rb_set_errinfo(Qnil);
 }
@@ -2039,7 +2105,7 @@ RB_METHOD_GUARD(mriRgssMain) {
         if (NIL_P(exc))
             break;
         
-        if (rb_obj_class(exc) == getRbData()->exc[Reset])
+        if (mkxpRubyObjClassEqualsSafe(exc, getRbData()->exc[Reset]))
             processReset(true);
         else
             rb_exc_raise(exc);
@@ -3975,9 +4041,12 @@ end
 
                 if (patchState) {
                     VALUE exc = rb_errinfo();
-                    if (exc != Qnil) {
+                    if (exc != Qnil && mkxpRubyObjIsKindOfSafe(exc, rb_eException)) {
                         VALUE msg = rb_funcall(exc, rb_intern("message"), 0);
                         fprintf(stderr, "[MKXP-Z] Win32API patch error: %s\n", StringValueCStr(msg));
+                        rb_set_errinfo(Qnil);
+                    } else if (exc != Qnil) {
+                        fprintf(stderr, "[MKXP-Z] Win32API patch failed with non-exception Ruby errinfo (state=%d)\n", patchState);
                         rb_set_errinfo(Qnil);
                     }
                 }
@@ -4171,7 +4240,7 @@ end
                 // Handle superclass mismatch error specially
             if (state) {
                 VALUE exc = rb_errinfo();
-                if (exc != Qnil && rb_obj_is_kind_of(exc, rb_eTypeError)) {
+                if (exc != Qnil && mkxpRubyObjIsKindOfSafe(exc, rb_eTypeError)) {
                     VALUE msg = rb_funcall(exc, rb_intern("message"), 0);
                     const char* msgStr = StringValueCStr(msg);
                     
@@ -4202,17 +4271,21 @@ end
                                     // Retry executing the ORIGINAL script
                                     rb_eval_string_protect(RSTRING_PTR(scriptDecoded), &state);
                                     
-                                    if (!state) {
-                                        fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✓ Fixed superclass mismatch for %s (class redefined)\n", i, scriptCount, className.c_str());
-                                        continue;
-                                    } else {
-                                         // Failed again
-                                         VALUE newExc = rb_errinfo();
-                                         VALUE newMsg = rb_funcall(newExc, rb_intern("message"), 0);
-                                         fprintf(stderr, "[MKXP-Z] Redefinition failing: %s. SKIPPING script: %s\n", StringValueCStr(newMsg), scriptName);
-                                         rb_set_errinfo(Qnil);
-                                         continue;
-                                    }
+	                                    if (!state) {
+	                                        fprintf(stderr, "[MKXP-Z] [%03ld/%ld] ✓ Fixed superclass mismatch for %s (class redefined)\n", i, scriptCount, className.c_str());
+	                                        continue;
+	                                    } else {
+	                                         // Failed again
+	                                         VALUE newExc = rb_errinfo();
+	                                         if (newExc != Qnil && mkxpRubyObjIsKindOfSafe(newExc, rb_eException)) {
+	                                             VALUE newMsg = rb_funcall(newExc, rb_intern("message"), 0);
+	                                             fprintf(stderr, "[MKXP-Z] Redefinition failing: %s. SKIPPING script: %s\n", StringValueCStr(newMsg), scriptName);
+	                                         } else {
+	                                             fprintf(stderr, "[MKXP-Z] Redefinition failed with non-exception Ruby errinfo. SKIPPING script: %s\n", scriptName);
+	                                         }
+	                                         rb_set_errinfo(Qnil);
+	                                         continue;
+	                                    }
                                 }
                             }
                         }
@@ -4233,7 +4306,7 @@ end
                 
                 // Try to get error details
                 VALUE errInfo = rb_errinfo();
-                if (errInfo != Qnil) {
+                if (errInfo != Qnil && mkxpRubyObjIsKindOfSafe(errInfo, rb_eException)) {
                     VALUE errClass = rb_class_name(rb_obj_class(errInfo));
                     VALUE errMsg = rb_funcall(errInfo, rb_intern("message"), 0);
                     const char* msgStr = StringValueCStr(errMsg);
@@ -4271,18 +4344,20 @@ end
                             int retryState;
                             evalString(fixedString, fname, &retryState);
                             
-                            if (retryState == 0) {
-                                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Fixed SyntaxError in '%s' (patched flagged line(s))\n", i, scriptCount, scriptName);
-                                continue;
-                            } else {
-                                // Still failed after fix
-                                VALUE retryExc = rb_errinfo();
-                                if (retryExc != Qnil) {
-                                    VALUE retryMsg = rb_funcall(retryExc, rb_intern("message"), 0);
-                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", StringValueCStr(retryMsg));
-                                }
-                                rb_set_errinfo(Qnil);
-                                fprintf(stderr, "[MKXP-Z] SKIPPING script after failed auto-fix: %s\n", scriptName);
+	                            if (retryState == 0) {
+	                                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Fixed SyntaxError in '%s' (patched flagged line(s))\n", i, scriptCount, scriptName);
+	                                continue;
+	                            } else {
+	                                // Still failed after fix
+	                                VALUE retryExc = rb_errinfo();
+	                                if (retryExc != Qnil && mkxpRubyObjIsKindOfSafe(retryExc, rb_eException)) {
+	                                    VALUE retryMsg = rb_funcall(retryExc, rb_intern("message"), 0);
+	                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", StringValueCStr(retryMsg));
+	                                } else if (retryExc != Qnil) {
+	                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed with non-exception Ruby errinfo (state=%d)\n", retryState);
+	                                }
+	                                rb_set_errinfo(Qnil);
+	                                fprintf(stderr, "[MKXP-Z] SKIPPING script after failed auto-fix: %s\n", scriptName);
                                 continue;
                             }
                         }
@@ -4293,11 +4368,13 @@ end
                     if (RB_TYPE_P(bt, RUBY_T_ARRAY)) {
                         long btLen = RARRAY_LEN(bt);
                         fprintf(stderr, "[MKXP-Z] Backtrace (%ld frames):\n", btLen);
-                        for (long j = 0; j < btLen && j < 10; j++) {
-                            VALUE line = rb_ary_entry(bt, j);
-                            fprintf(stderr, "[MKXP-Z]   %ld: %s\n", j, StringValueCStr(line));
-                        }
-                    }
+	                        for (long j = 0; j < btLen && j < 10; j++) {
+	                            VALUE line = rb_ary_entry(bt, j);
+	                        fprintf(stderr, "[MKXP-Z]   %ld: %s\n", j, StringValueCStr(line));
+	                    }
+	                }
+                } else if (errInfo != Qnil) {
+                    fprintf(stderr, "[MKXP-Z] Non-exception Ruby errinfo while loading script: %s (state=%d)\n", scriptName, state);
                 }
                 
                 break;
@@ -4305,12 +4382,14 @@ end
         }
 
         VALUE exc = rb_gv_get("$!");
-        if (exc != Qnil) {
+        if (exc != Qnil && mkxpRubyObjIsKindOfSafe(exc, rb_eException)) {
             VALUE excClass = rb_class_name(rb_obj_class(exc));
             fprintf(stderr, "[MKXP-Z] Post-loop exception: %s\n", StringValueCStr(excClass));
+        } else if (exc != Qnil) {
+            fprintf(stderr, "[MKXP-Z] Post-loop Ruby errinfo is not an exception\n");
         }
 
-        if (rb_obj_class(exc) != getRbData()->exc[Reset]) {
+        if (!mkxpRubyObjClassEqualsSafe(exc, getRbData()->exc[Reset])) {
             break;
         }
 
@@ -4816,8 +4895,13 @@ static void mriBindingExecute() {
 #else
     VALUE exc = rb_gv_get("$!");
 #endif
-    if (!NIL_P(exc) && !rb_obj_is_kind_of(exc, rb_eSystemExit))
+    if (!NIL_P(exc) &&
+        mkxpRubyObjIsKindOfSafe(exc, rb_eException) &&
+        !mkxpRubyObjIsKindOfSafe(exc, rb_eSystemExit)) {
         showExc(exc, btData);
+    } else if (!NIL_P(exc) && !mkxpRubyObjIsKindOfSafe(exc, rb_eException)) {
+        fprintf(stderr, "[MKXP-Z] Ruby errinfo is not an exception after game execution; clearing without class lookup\n");
+    }
     
     // CRITICAL: Do NOT call ruby_cleanup() here!
     // In Ruby 3.x, ruby_cleanup() destroys the Ruby VM completely.
