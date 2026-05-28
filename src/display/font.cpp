@@ -42,20 +42,6 @@
 #include <algorithm>
 #include <cctype>
 #include <array>
-#include <chrono>
-#include <cstdio>
-
-/* [FONTLOAD] diagnostic — Pokemon menu stutter teshisi.
- * Bypass: log seviyesinden bagimsiz olarak stderr'e yazar cunku
- * tab-switch sirasinda font cache-miss olup olmadigini gormek kritik. */
-namespace {
-    static uint32_t g_font_open_count = 0;
-    static inline uint64_t fontload_now_us() {
-        using namespace std::chrono;
-        return (uint64_t)duration_cast<microseconds>(
-            steady_clock::now().time_since_epoch()).count();
-    }
-}
 
 // Enable embedded font for Xcode/iOS builds too
 //#ifndef MKXPZ_BUILD_XCODE
@@ -515,14 +501,11 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 	
 	/* Not in pool; open new handle */
 	SDL_RWops *ops;
-	uint64_t __fontload_t0 = fontload_now_us();
-	bool __used_bundled_fallback = false;
 
 	if (family.empty())
 	{
 		/* Built-in font */
 		ops = openBundledFont();
-		__used_bundled_fallback = true;
 	}
 	else
 	{
@@ -538,30 +521,14 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 			SDL_FreeRW(ops);
 			/* Font file not found - fall back to bundled font */
 			Debug() << "Font file not found, using fallback:" << path;
-			std::fprintf(stderr,
-				"[FONTLOAD] file_not_found path='%s' falling_back_to_bundled\n",
-				path);
-			std::fflush(stderr);
 			family = "";
 			key = FontSizeKey(family, size);
 			ops = openBundledFont();
-			__used_bundled_fallback = true;
 		}
 	}
 
 	/* Try to compute the size the same way Windows does. */
 	font = TTF_OpenFontRW(ops, 1, 0);
-	g_font_open_count++;
-	uint64_t __fontload_open_us = fontload_now_us() - __fontload_t0;
-	std::fprintf(stderr,
-		"[FONTLOAD] open #%u family='%s' size=%d hires=%.2f outline=%d "
-		"bundled=%d open_us=%llu\n",
-		g_font_open_count,
-		family.empty() ? "(bundled)" : family.c_str(),
-		size, (double)hiresMult, outline_size,
-		__used_bundled_fallback ? 1 : 0,
-		(unsigned long long)__fontload_open_us);
-	std::fflush(stderr);
 
 	if (font)
 	{

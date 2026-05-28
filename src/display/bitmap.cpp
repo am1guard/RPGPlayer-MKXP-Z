@@ -54,7 +54,6 @@
 #include <math.h>
 #include <algorithm>
 #include <vector>
-#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <list>
@@ -188,122 +187,11 @@ extern "C" void mkxpz_textcache_clear()
     g_textCacheMisses = 0;
 }
 
-/* === [TEXTPERF] diagnostic instrumentation ============================
- * Pokemon Essentials tab-switch stutter teshisi icin per-frame text-render
- * sayaclarini tutar; Graphics::update sonunda esik asilirsa stderr'e yazar.
- * Bypass: g_mkxpz_log_level'i gozardi eder cunku amac issue reproduction
- * sirasinda kesin sayilari yakalamak.
- * ===================================================================== */
-namespace {
-    struct TextPerfFrameState {
-        uint32_t drawText_calls = 0;
-        uint64_t drawText_us = 0;
-        uint32_t textSize_calls = 0;
-        uint64_t textSize_us = 0;
-        uint32_t ttfRender_calls = 0;
-        uint64_t ttfRender_us = 0;
-        uint32_t ttfMeasure_calls = 0;
-        uint32_t ttfSize_calls = 0;
-        uint32_t hangulScan_calls = 0;
-        uint32_t getSdlFont_calls = 0;
-        uint64_t slowest_drawText_us = 0;
-        char     slowest_drawText_str[96] = {0};
-        uint32_t frame_index = 0;
-    };
-    static TextPerfFrameState g_textperf;
-
-    static inline uint64_t now_us() {
-        using namespace std::chrono;
-        return (uint64_t)duration_cast<microseconds>(
-            steady_clock::now().time_since_epoch()).count();
-    }
-
-    /* RAII scope timer; on destruction adds elapsed us to the given counter
-     * and increments the call counter. */
-    struct ScopeTimer {
-        uint64_t  start;
-        uint32_t *count;
-        uint64_t *us_total;
-        ScopeTimer(uint32_t *c, uint64_t *u) : start(now_us()), count(c), us_total(u) {}
-        ~ScopeTimer() {
-            uint64_t elapsed = now_us() - start;
-            (*count)++;
-            (*us_total) += elapsed;
-        }
-    };
-
-    /* Variant that also tracks slowest-call string for drawText. */
-    struct DrawTextTimer {
-        uint64_t start;
-        const char *str;
-        DrawTextTimer(const char *s) : start(now_us()), str(s) {}
-        ~DrawTextTimer() {
-            uint64_t elapsed = now_us() - start;
-            g_textperf.drawText_calls++;
-            g_textperf.drawText_us += elapsed;
-            if (elapsed > g_textperf.slowest_drawText_us) {
-                g_textperf.slowest_drawText_us = elapsed;
-                if (str) {
-                    size_t cap = sizeof(g_textperf.slowest_drawText_str) - 1;
-                    std::strncpy(g_textperf.slowest_drawText_str, str, cap);
-                    g_textperf.slowest_drawText_str[cap] = '\0';
-                } else {
-                    g_textperf.slowest_drawText_str[0] = '\0';
-                }
-            }
-        }
-    };
-}
-
-/* C-linkage entry point so Graphics::update can flush per-frame stats
- * without pulling in C++ headers. */
-extern "C" void mkxpz_textperf_flush_frame()
+/* Invalidate fast-blit state cache at frame boundary — between frames,
+ * Graphics::redrawScreen and other render passes change GL state
+ * unpredictably. Frame-scoped memoization is safe; cross-frame is not. */
+extern "C" void mkxpz_fastblit_invalidate_frame()
 {
-    g_textperf.frame_index++;
-
-    const uint64_t text_total_us = g_textperf.drawText_us + g_textperf.textSize_us;
-    const uint32_t text_total_calls = g_textperf.drawText_calls + g_textperf.textSize_calls;
-
-    /* Esikler — bunlardan herhangi biri asilirsa frame loglanir.
-     * Pokemon menu tab-switch'leri tipik olarak 60+ draw_text + 10+ ms uretir. */
-    const bool over_time = text_total_us >= 5000;       /* >= 5 ms text-render */
-    const bool over_calls = text_total_calls >= 30;     /* yogun frame */
-    const bool slow_outlier = g_textperf.slowest_drawText_us >= 2000; /* tek call >= 2ms */
-
-    if (over_time || over_calls || slow_outlier) {
-        /* Bypass g_mkxpz_log_level: bu bir teshis logu, default ERROR seviyesinde
-         * bile gorunmesi gerekiyor. */
-        std::fprintf(stderr,
-            "[TEXTPERF] frame=%u draw=%u/%lluus size=%u/%lluus "
-            "render=%u/%lluus measure=%u sizeUtf=%u hangul=%u getFont=%u "
-            "cacheHits=%llu/%llu cacheSize=%zu slowest=%lluus '%s'\n",
-            g_textperf.frame_index,
-            g_textperf.drawText_calls,
-            (unsigned long long)g_textperf.drawText_us,
-            g_textperf.textSize_calls,
-            (unsigned long long)g_textperf.textSize_us,
-            g_textperf.ttfRender_calls,
-            (unsigned long long)g_textperf.ttfRender_us,
-            g_textperf.ttfMeasure_calls,
-            g_textperf.ttfSize_calls,
-            g_textperf.hangulScan_calls,
-            g_textperf.getSdlFont_calls,
-            (unsigned long long)g_textCacheHits,
-            (unsigned long long)(g_textCacheHits + g_textCacheMisses),
-            g_textCache.size(),
-            (unsigned long long)g_textperf.slowest_drawText_us,
-            g_textperf.slowest_drawText_str);
-        std::fflush(stderr);
-    }
-
-    /* Reset per-frame counters but keep monotonic frame_index */
-    uint32_t fi = g_textperf.frame_index;
-    g_textperf = TextPerfFrameState{};
-    g_textperf.frame_index = fi;
-
-    /* Invalidate fast-blit state cache at frame boundary — between frames,
-     * Graphics::redrawScreen and other render passes change GL state
-     * unpredictably. Frame-scoped memoization is safe; cross-frame is not. */
     g_lastFastBlitDestFboGl = 0;
     g_lastFastBlitSrcTexGl = 0;
     g_simpleShaderUniformsInited = false;
@@ -2675,7 +2563,6 @@ static SDL_Surface *renderUTF8WithHangulFallbackSpacing(TTF_Font *font,
 
 void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 {
-    DrawTextTimer __textperf_dt(str);
     guardDisposed();
 
     GUARD_MEGA;
@@ -2834,7 +2721,6 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         /* Trim the text to only fill double the rect width */
         int charLimit = 0;
         bool didTrim = false;
-        g_textperf.ttfMeasure_calls++;
         if (TTF_MeasureUTF8(sdlFont, str, std::min(width() - rect.x, rect.w) / squeezeLimit, nullptr, &charLimit) == 0)
         {
             if (charLimit != (int)fixed.size())
@@ -2862,7 +2748,6 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
         }
 
         SDL_Surface *txtSurf;
-        g_textperf.hangulScan_calls++;
         const bool useHangulFallbackSpacing = needsHangulFallbackSpacing(p->font, str);
 
         if (useHangulFallbackSpacing)
@@ -2872,13 +2757,10 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
         if (!txtSurf)
         {
-            uint64_t __rt0 = now_us();
             if (p->font->isSolid())
                 txtSurf = TTF_RenderUTF8_Solid(sdlFont, str, c);
             else
                 txtSurf = TTF_RenderUTF8_Blended(sdlFont, str, c);
-            g_textperf.ttfRender_calls++;
-            g_textperf.ttfRender_us += (now_us() - __rt0);
         }
 
         if (!txtSurf)
@@ -2918,13 +2800,10 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
             if (!outline)
             {
-                uint64_t __rt1 = now_us();
                 if (p->font->isSolid())
                     outline = TTF_RenderUTF8_Solid(sdlOutline, str, co);
                 else
                     outline = TTF_RenderUTF8_Blended(sdlOutline, str, co);
-                g_textperf.ttfRender_calls++;
-                g_textperf.ttfRender_us += (now_us() - __rt1);
             }
 
             if (!outline) {
@@ -3121,7 +3000,6 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
 IntRect Bitmap::textSize(const char *str)
 {
-    ScopeTimer __textperf_ts(&g_textperf.textSize_calls, &g_textperf.textSize_us);
     guardDisposed();
 
     GUARD_MEGA;
@@ -3140,9 +3018,7 @@ IntRect Bitmap::textSize(const char *str)
     std::string fixed = fixedBase + " ";
     
     int w, h;
-    g_textperf.ttfSize_calls++;
     TTF_SizeUTF8(sdlFont, fixed.c_str(), &w, &h);
-    g_textperf.hangulScan_calls++;
     const bool useHangulFallbackSpacing = needsHangulFallbackSpacing(p->font, fixedBase.c_str());
 
     if (useHangulFallbackSpacing)
@@ -3157,7 +3033,6 @@ IntRect Bitmap::textSize(const char *str)
     else
     {
         int ws;
-        g_textperf.ttfSize_calls++;
         TTF_SizeUTF8(sdlFont, " ", &ws, 0);
         w -= ws;
     }

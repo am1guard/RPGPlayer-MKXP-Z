@@ -57,8 +57,9 @@
 #include "steamshim_child.h"
 #endif
 
-/* [TEXTPERF] flush hook — implemented in bitmap.cpp */
-extern "C" void mkxpz_textperf_flush_frame();
+/* Fast-blit GL state cache invalidation hook — implemented in bitmap.cpp.
+ * Frame-scoped memoization is safe; cross-frame is not. */
+extern "C" void mkxpz_fastblit_invalidate_frame();
 
 #include <algorithm>
 #include <errno.h>
@@ -1275,10 +1276,7 @@ void Graphics::update(bool checkForShutdown) {
     p->redrawScreen();
     updateCount++;
 
-    /* [TEXTPERF] flush — Pokemon menu tab-switch stutter teshisi.
-     * bitmap.cpp icindeki per-frame text-render sayaclarini topla, esik
-     * asilirsa stderr'e [TEXTPERF] satiri bas. */
-    mkxpz_textperf_flush_frame();
+    mkxpz_fastblit_invalidate_frame();
 }
 
 void Graphics::freeze() {
