@@ -245,6 +245,15 @@ struct TilemapPrivate
 	Table *mapData;
 	Table *priorities;
 	bool visible;
+	/* When false, tiles outside the map data bounds are not drawn at all.
+	 * RGSS Tilemaps endlessly repeat (wrap) the map data past its edges;
+	 * Pokemon Essentials' pure-Ruby CustomTilemap never wraps, and its
+	 * connected-map rendering relies on out-of-bounds areas staying empty.
+	 * The Correction.rb CustomTilemap bridge sets this to false so ghost
+	 * copies of the map (boats, item balls, berry trees from the opposite
+	 * map edge) don't appear near map borders. Default true = stock RGSS
+	 * behavior, all non-bridged games are unaffected. */
+	bool wrapMap;
 	Vec2i origin;
 
 	Vec2i dispPos;
@@ -351,6 +360,7 @@ struct TilemapPrivate
 	      mapData(0),
 	      priorities(0),
 	      visible(true),
+	      wrapMap(true),
 	      flashAlphaIdx(0),
 	      atlasSizeDirty(false),
 	      atlasDirty(false),
@@ -744,6 +754,17 @@ struct TilemapPrivate
 
 	void handleTile(int x, int y, int z)
 	{
+		/* No-wrap mode: skip tiles outside the map data entirely so the
+		 * out-of-bounds region stays transparent instead of repeating the
+		 * opposite edge of the map (see `wrap` member comment). */
+		if (!wrapMap)
+		{
+			int mx = x + viewpPos.x;
+			int my = y + viewpPos.y;
+			if (mx < 0 || my < 0 || mx >= mapData->xSize() || my >= mapData->ySize())
+				return;
+		}
+
 		int tileInd =
 			tableGetWrapped(*mapData, x + viewpPos.x, y + viewpPos.y, z);
 
@@ -1290,6 +1311,7 @@ DEF_ATTR_RD_SIMPLE(Tilemap, MapData, Table*, p->mapData)
 DEF_ATTR_RD_SIMPLE(Tilemap, FlashData, Table*, p->flashMap.getData())
 DEF_ATTR_RD_SIMPLE(Tilemap, Priorities, Table*, p->priorities)
 DEF_ATTR_RD_SIMPLE(Tilemap, Visible, bool, p->visible)
+DEF_ATTR_RD_SIMPLE(Tilemap, Wrap, bool, p->wrapMap)
 DEF_ATTR_RD_SIMPLE(Tilemap, OX, int, p->origin.x)
 DEF_ATTR_RD_SIMPLE(Tilemap, OY, int, p->origin.y)
 
@@ -1385,6 +1407,19 @@ void Tilemap::setVisible(bool value)
 	p->elem.ground->setVisible(value);
 	for (size_t i = 0; i < p->elem.activeLayers; ++i)
 		p->elem.zlayers[i]->setVisible(value);
+}
+
+void Tilemap::setWrap(bool value)
+{
+	guardDisposed();
+
+	if (p->wrapMap == value)
+		return;
+
+	p->wrapMap = value;
+
+	/* Rebuild tile buffers so out-of-bounds quads are dropped/added */
+	p->invalidateBuffers();
 }
 
 void Tilemap::setOX(int value)

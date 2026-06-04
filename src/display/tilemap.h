@@ -66,6 +66,7 @@ public:
 	DECL_ATTR( FlashData,  Table*    )
 	DECL_ATTR( Priorities, Table*    )
 	DECL_ATTR( Visible,    bool      )
+	DECL_ATTR( Wrap,       bool      )
 	DECL_ATTR( OX,         int       )
 	DECL_ATTR( OY,         int       )
 

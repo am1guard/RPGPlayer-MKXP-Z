@@ -2170,6 +2170,51 @@ static std::string fixupString(const char *str)
     return s;
 }
 
+/* GDI-style synthetic bold for text drawn with the bundled fallback font:
+ * overstrike the glyph coverage (alpha channel) horizontally WITHOUT touching
+ * any advance metrics. The bundled CJK fallback renders far thinner than the
+ * Windows fonts (Arial / MS Gothic / VL Gothic) games were designed against.
+ * TTF_STYLE_BOLD is not usable for this: SDL_ttf also widens every glyph's
+ * advance by glyph_overhang (ppem/10), which overflows the fixed per-line
+ * text layout games authored against Windows font metrics (RGSS message
+ * windows draw per character with no word wrap - overflowing characters are
+ * silently dropped outside the contents Bitmap). This keeps layout identical
+ * and only fattens the rendered pixels. Operates in-place; the rightmost
+ * column of the final glyph loses at most `overhang` px of the added weight,
+ * which is invisible in practice. Expects a 32-bit surface (post
+ * ensureFormat). */
+static void emboldenSurfaceAlpha(SDL_Surface *in, int overhang)
+{
+    if (!in || overhang <= 0 || in->format->BytesPerPixel != 4)
+        return;
+
+    const SDL_PixelFormat &fm = *in->format;
+
+    for (int y = 0; y < in->h; ++y)
+    {
+        uint32_t *row = (uint32_t*) ((uint8_t*) in->pixels + y*in->pitch);
+
+        /* Right-to-left so the pixels read at x-k are still the unmodified
+         * originals (left-to-right would smear coverage across the row). */
+        for (int x = in->w - 1; x >= 1; --x)
+        {
+            uint32_t a = (row[x] & fm.Amask) >> fm.Ashift;
+
+            for (int k = 1; k <= overhang && k <= x; ++k)
+            {
+                uint32_t a2 = (row[x-k] & fm.Amask) >> fm.Ashift;
+                /* saturating "over" blend of the two coverage values */
+                a = a + a2 - (a * a2) / 255;
+            }
+
+            if (a > 255)
+                a = 255;
+
+            row[x] = (row[x] & ~fm.Amask) | (a << fm.Ashift);
+        }
+    }
+}
+
 static void applyShadow(SDL_Surface *&in, const SDL_PixelFormat &fm, const SDL_Color &c, int offset)
 {
     SDL_Surface *out = SDL_CreateRGBSurface
@@ -2769,6 +2814,17 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
         p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
 
+        /* Fallback-font synthetic bold (see emboldenSurfaceAlpha). Applied
+         * before the shadow so the shadow derives from the fattened glyphs.
+         * FontHeight/11 tracks SDL_ttf's own bold overhang (ppem/10) for the
+         * bundled font's metrics: ppem 18 -> 1px, ppem 20+ -> 2px. */
+        int fallbackBoldOverhang = 0;
+        if (p->font->usesBundledFallback())
+        {
+            fallbackBoldOverhang = clamp(TTF_FontHeight(sdlFont) / 11, 1, 3);
+            emboldenSurfaceAlpha(txtSurf, fallbackBoldOverhang);
+        }
+
         if (p->font->getShadow())
         {
             int scaledShadowSize = 1;
@@ -2813,6 +2869,11 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
             }
 
             p->ensureFormat(outline, SDL_PIXELFORMAT_ABGR8888);
+
+            /* Keep the outline pass consistent with the fattened text pass
+             * so the bolded glyphs stay fully covered by their outline. */
+            if (fallbackBoldOverhang)
+                emboldenSurfaceAlpha(outline, fallbackBoldOverhang);
 
             int outlineCropUndo = shState->config().fontOutlineCrop ? 0 : scaledOutlineSize;
 
