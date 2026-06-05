@@ -206,9 +206,8 @@ enum InterpolationMethod
 	Bilinear = 1,
 	Bicubic = 2,
 	Lanczos3 = 3,
-#ifdef MKXPZ_SSL
+	/* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
 	xBRZ = 4,
-#endif
 };
 
 enum SpecialScale

@@ -49,9 +49,8 @@ struct Config {
     int bitmapSmoothScalingDown;
     bool smoothScalingMipmaps;
     int bicubicSharpness;
-#ifdef MKXPZ_SSL
+    /* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
     double xbrzScalingFactor;
-#endif
     bool enableHires;
     double textureScalingFactor;
     double framebufferScalingFactor;

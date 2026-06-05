@@ -49,9 +49,8 @@
 #include "flashMap.frag.xxd"
 #include "bicubic.frag.xxd"
 #include "lanczos3.frag.xxd"
-#ifdef MKXPZ_SSL
+/* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
 #include "xbrz.frag.xxd"
-#endif
 #include "minimal.vert.xxd"
 #include "simple.vert.xxd"
 #include "simpleColor.vert.xxd"
@@ -418,7 +417,6 @@ void Lanczos3SpriteShader::setTexSize(const Vec2i &value)
 	gl.Uniform2f(u_sourceSize, (float)value.x, (float)value.y);
 }
 
-#ifdef MKXPZ_SSL
 XbrzSpriteShader::XbrzSpriteShader()
 {
 	INIT_SHADER(sprite, xbrz, XbrzSpriteShader);
@@ -434,7 +432,6 @@ void XbrzSpriteShader::setTargetScale(const Vec2 &value)
 {
 	gl.Uniform2f(u_targetScale, value.x, value.y);
 }
-#endif
 
 AlphaSpriteShader::AlphaSpriteShader()
 {
@@ -853,7 +850,6 @@ void Lanczos3Shader::setTexSize(const Vec2i &value)
 	gl.Uniform2f(u_sourceSize, (float)value.x, (float)value.y);
 }
 
-#ifdef MKXPZ_SSL
 XbrzShader::XbrzShader()
 {
 	INIT_SHADER(simple, xbrz, XbrzShader);
@@ -869,4 +865,3 @@ void XbrzShader::setTargetScale(const Vec2 &value)
 {
 	gl.Uniform2f(u_targetScale, value.x, value.y);
 }
-#endif

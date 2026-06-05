@@ -754,7 +754,7 @@ void Sprite::draw()
             base = &shader;
         }
             break;
-#ifdef MKXPZ_SSL
+        /* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
         case xBRZ:
         {
             XbrzSpriteShader &shader = shState->shaders().xbrzSprite;
@@ -767,7 +767,6 @@ void Sprite::draw()
             base = &shader;
         }
             break;
-#endif
         default:
         {
             SimpleSpriteShader &shader = shState->shaders().simpleSprite;
@@ -784,13 +783,12 @@ void Sprite::draw()
     
     p->bitmap->bindTex(*base, false);
 
-#ifdef MKXPZ_SSL
+    /* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
     if (scalingMethod == xBRZ)
     {
         XbrzShader &shader = shState->shaders().xbrz;
         shader.setTargetScale(Vec2((float)(shState->config().xbrzScalingFactor), (float)(shState->config().xbrzScalingFactor)));
     }
-#endif
     
     TEX::setSmooth(scalingMethod == Bilinear);
 

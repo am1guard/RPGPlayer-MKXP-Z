@@ -232,7 +232,7 @@ static void _blitBegin(FBO::ID fbo, const Vec2i &size, int scaleIsSpecial)
 		}
 
 			break;
-#ifdef MKXPZ_SSL
+		/* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
 		case xBRZ:
 		{
 			XbrzShader &shader = shState->shaders().xbrz;
@@ -244,7 +244,6 @@ static void _blitBegin(FBO::ID fbo, const Vec2i &size, int scaleIsSpecial)
 		}
 
 			break;
-#endif
 		default:
 		{
 			SimpleShader &shader = shState->shaders().simple;
@@ -333,7 +332,7 @@ void blitSource(TEXFBO &source, int scaleIsSpecial)
 		}
 
 			break;
-#ifdef MKXPZ_SSL
+		/* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
 		case xBRZ:
 		{
 			XbrzShader &shader = shState->shaders().xbrz;
@@ -342,7 +341,6 @@ void blitSource(TEXFBO &source, int scaleIsSpecial)
 		}
 
 			break;
-#endif
 		default:
 		{
 			SimpleShader &shader = shState->shaders().simple;
@@ -388,13 +386,12 @@ void blitRectangle(const IntRect &src, const IntRect &dst, bool smooth)
 	}
 	else
 	{
-#ifdef MKXPZ_SSL
+		/* iOS: xBRZ guard'ı MKXPZ_SSL'den ayrıldı - shader SSL gerektirmez. */
 		if (shState->config().smoothScaling == xBRZ)
 		{
 			XbrzShader &shader = shState->shaders().xbrz;
 			shader.setTargetScale(Vec2((float)(shState->config().xbrzScalingFactor), (float)(shState->config().xbrzScalingFactor)));
 		}
-#endif
 		if (smooth)
 			TEX::setSmooth(true);
 
