@@ -456,8 +456,22 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
     strTolower(lowerFilename);
     list.push_back(lowerFilename);
 
-    /* Add the lower -> mixed mapping of the file's full path */
-    data.p->pathCache.insert(lowerCase, mixedCase);
+    /* Add the lower -> mixed mapping of the file's full path.
+     *
+     * KEEP-FIRST (not overwrite): the cache is built by enumerating mounts in
+     * search-path priority order (highest priority first: patches > archive >
+     * loose game dir > RTP). When the same lowercase path exists in more than one
+     * mount with different casing (e.g. a game ships "Audio/BGM/Town1.ogg" AND the
+     * RTP also has "audio/bgm/town1.ogg"), the cached mixed-case path decides which
+     * physical file openReadEnumCB ultimately opens via PHYSFS_openRead. The old
+     * code overwrote on every insert (last-wins), so the LOWEST-priority mount
+     * (RTP, enumerated last) won and its standard track played instead of the
+     * game's own music. Keeping the FIRST (highest-priority) entry makes the path
+     * cache agree with PHYSFS' own mount-priority resolution: the game's file wins
+     * over the RTP fallback, matching RPG Maker semantics. Games without
+     * cross-mount name collisions are unaffected (no duplicate keys). */
+    if (!data.p->pathCache.contains(lowerCase))
+        data.p->pathCache.insert(lowerCase, mixedCase);
   }
 
   return PHYSFS_ENUM_OK;
