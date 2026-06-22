@@ -573,6 +573,21 @@ static void mriBindingInit() {
         "          $stderr.puts \"[MKXP-Z] FAILED to find faulty index assignment in code\"\n"
         "        end\n"
         "        raise\n"
+        "      elsif code =~ /\\\\[ \\t]*\\r?\\n[ \\t]/\n"
+        "        # Ruby 1.8 line continuation: a backslash followed by an indented\n"
+        "        # next line. Modern Ruby keeps the leading whitespace when joining,\n"
+        "        # turning 'foo.show\\\\\\n   (args)' into 'foo.show   (args)' (a spaced\n"
+        "        # call) which fails to parse. Old Chinese RPG Maker XP event scripts\n"
+        "        # (Call Script command) use this idiom. Join the continued lines\n"
+        "        # tightly (drop the backslash, newline and indentation) so the call\n"
+        "        # becomes contiguous. Retry-only: untouched unless the eval already\n"
+        "        # failed AND this pattern is present.\n"
+        "        joined = code.gsub(/\\\\[ \\t]*\\r?\\n[ \\t]*/, '')\n"
+        "        if joined != code\n"
+        "          $stderr.puts \"[MKXP-Z] SyntaxError (Ruby 1.8 line continuation) in #{filename}; joining continued lines\"\n"
+        "          return wrap_eval(caller_binding, joined, binding_obj, filename, lineno)\n"
+        "        end\n"
+        "        raise\n"
         "      else\n"
         "        raise\n"
         "      end\n"
@@ -2766,6 +2781,38 @@ static std::string rewriteSingletonClassVariableLine(const std::string &line,
     return rewritten;
 }
 
+// Detect whether an assignment RHS references a Ruby constant (an identifier that
+// starts with an uppercase letter), ignoring string literals and trailing comments.
+// Used to decide whether a singleton-class "@@var = ..." initializer can be safely
+// HOISTED above the "class <<" line. If the RHS depends on a constant that is defined
+// INSIDE the same singleton block (e.g. "DwCount" in the snap_to_bitmap script:
+//   class << Graphics
+//     DwCount = (800*480 * 4)
+//     @@lpBits = "\000" * DwCount
+// hoisting the @@lpBits initializer above the block would run it BEFORE DwCount is
+// defined, raising "uninitialized constant DwCount". When the RHS references a
+// constant we rewrite the assignment in place instead of hoisting it.
+static bool rhsReferencesConstant(const std::string &rhs) {
+    bool inSingle = false, inDouble = false, escaping = false;
+    for (size_t i = 0; i < rhs.size(); i++) {
+        char c = rhs[i];
+        if (escaping) { escaping = false; continue; }
+        if (inSingle || inDouble) {
+            if (c == '\\') escaping = true;
+            else if ((inSingle && c == '\'') || (inDouble && c == '"')) { inSingle = false; inDouble = false; }
+            continue;
+        }
+        if (c == '#') break; // rest of the line is a comment
+        if (c == '\'') { inSingle = true; continue; }
+        if (c == '"') { inDouble = true; continue; }
+        if (c >= 'A' && c <= 'Z') {
+            // Constant start only if not in the middle of an identifier
+            if (i == 0 || !isRubyIdentifierChar(rhs[i-1])) return true;
+        }
+    }
+    return false;
+}
+
 // Ruby 3.x compat: Fix @@class_variables inside class << IDENTIFIER singleton blocks.
 // In Ruby 3.x, assigning or reading @@ inside a singleton class raises RuntimeError:
 //   "class variable access from toplevel"
@@ -2908,9 +2955,32 @@ static std::string wrapScriptForClassVariableCompat(const std::string &script, c
                     while (rhsTrim < rhs.size() && (rhs[rhsTrim] == ' ' || rhs[rhsTrim] == '\t')) rhsTrim++;
                     rhs = rhs.substr(rhsTrim);
 
-                    // Build class_variable_set call
-                    std::string injection = identifier + ".class_variable_set(:" + varName + ", " + rhs + ")";
-                    injections += injection + "\n";
+                    // Build class_variable_set call (explicit setter avoids the
+                    // Ruby 3.x "class variable access from toplevel" error).
+                    std::string setterCall = identifier + ".class_variable_set(:" + varName + ", " + rhs + ")";
+
+                    if (rhsReferencesConstant(rhs)) {
+                        // RHS depends on a constant (possibly one defined earlier
+                        // INSIDE this singleton block, e.g. DwCount). Hoisting the
+                        // setter ABOVE the block would run it before that constant
+                        // exists -> "uninitialized constant" NameError. Rewrite the
+                        // assignment IN-PLACE instead so it runs in original order
+                        // (after the constant), preserving indentation.
+                        std::string indent = line.substr(0, trimPos);
+                        result.replace(lineStart, lineEnd - lineStart, indent + setterCall);
+                        size_t newLineEnd = result.find('\n', lineStart);
+                        if (newLineEnd == std::string::npos) newLineEnd = result.length();
+                        size_t lineLenDiff = (newLineEnd - lineStart) - (lineEnd - lineStart);
+                        blockEnd += lineLenDiff;
+
+                        assignmentPatchCount++;
+                        blockAssignmentPatchCount++;
+                        scanPos = newLineEnd + 1;
+                        continue;
+                    }
+
+                    // Default: hoist the initializer above the "class <<" line.
+                    injections += setterCall + "\n";
 
                     // Comment out the original line inside the block
                     result.replace(lineStart, lineEnd - lineStart, "# [MKXP-Z] moved: " + line.substr(trimPos));
@@ -3599,6 +3669,14 @@ static std::vector<SyntaxErrorTarget> extractSyntaxErrorTargets(const std::strin
             text.find("unexpected `else'") != std::string::npos) {
             return "else";
         }
+        // Ruby 1.8 allowed bare "retry" inside iterator blocks to restart the
+        // iterator. Ruby 1.9+/Prism rejects this as "Invalid retry without rescue".
+        // Old Chinese/Japanese RPG Maker XP scripts (e.g. "描绘文本加强 by Road")
+        // use this idiom. We target only the flagged line so a valid rescue-side
+        // retry (which never raises this error) is left untouched.
+        if (text.find("Invalid retry") != std::string::npos) {
+            return "retry";
+        }
         return "";
     };
 
@@ -3650,6 +3728,15 @@ static std::string applyTargetedSyntaxRecovery(const std::string& script, const 
             } else if (type == "else") {
                 line = "# " + line + " # [MKXP-Z] SYNTAX RECOVERY: removed unexpected else";
                 fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': commented out unexpected 'else'\n", currentLine, scriptName.c_str());
+            } else if (type == "retry") {
+                // Ruby 1.8 bare "retry" in an iterator block restarts the iterator.
+                // Modern Ruby's closest in-block equivalent is "redo" (re-runs the
+                // block; the existing "retry if/unless" -> "redo if/unless" fix above
+                // relies on the same equivalence). Verified semantically identical for
+                // the split-loop idiom these scripts use.
+                std::regex retryPattern(R"(\bretry\b)");
+                line = std::regex_replace(line, retryPattern, "redo");
+                fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': replaced 'retry' with 'redo'\n", currentLine, scriptName.c_str());
             }
         }
         
@@ -4320,8 +4407,9 @@ end
                     // Older RPG Maker scripts sometimes use next/break where return
                     // should be used. We detect this at runtime and fix it via regex.
                     if (strstr(classStr, "SyntaxError") != nullptr &&
-                        (strstr(msgStr, "Invalid next") != nullptr || strstr(msgStr, "Invalid break") != nullptr || 
-                         strstr(msgStr, "unexpected else") != nullptr || strstr(msgStr, "unexpected `else'") != nullptr)) {
+                        (strstr(msgStr, "Invalid next") != nullptr || strstr(msgStr, "Invalid break") != nullptr ||
+                         strstr(msgStr, "unexpected else") != nullptr || strstr(msgStr, "unexpected `else'") != nullptr ||
+                         strstr(msgStr, "Invalid retry") != nullptr)) {
                         
                         fprintf(stderr, "[MKXP-Z] Detected SyntaxError in '%s', attempting targeted auto-fix...\n", scriptName);
                         
