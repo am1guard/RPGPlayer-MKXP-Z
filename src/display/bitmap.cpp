@@ -540,18 +540,34 @@ struct BitmapPrivate
             return;
         }
 
+        // iOS FIX (Nova savas "sprite karismasi" hayaleti): TexPool::request bir
+        // cache-miss'te yeni TEXFBO uretirken TEXFBO::linkFBO -> FBO::bind ile o
+        // texture'in FBO'sunu baglar ve BAGLI BIRAKIR (FBO::boundFramebufferID =
+        // mega FBO). ensureMegaBacking render dongusunun ICINDE (bindTexture ->
+        // sprite cizimi) calistigindan, ekrandaki render hedefini mega texture'in
+        // FBO'suna kaydirir; render hedefi her sprite'ta degil kare basina bir kez
+        // baglandigindan, sonra cizilen YUKSEK-Z sprite'lar (PE foe data box,
+        // z=10150) yanlislikla mega texture'in FBO'suna cizilip o texture'i kirletir
+        // -> sonraki karede animasyonlu partikul, data box icerigini sprite
+        // konumunda gosterir (nadir, tek-kare hayalet; yalniz mega-bitmap'li belli
+        // hamlelerde). Cozum: texPool churn'undan ONCE bagli FBO'yu yakala, texture
+        // upload'undan SONRA geri yukle -> ensureMegaBacking render FBO durumuna
+        // seffaf kalir, ekran hedefi bozulmaz.
+        FBO::ID prevFBO = FBO::boundFramebufferID;
         try {
             gl = shState->texPool().request(scaledW, scaledH);
         } catch (const Exception &e) {
             fprintf(stderr,
                     "[MKXP-Z] ensureMegaBacking: texPool request failed (%dx%d)\n",
                     scaledW, scaledH);
+            FBO::bind(prevFBO);
             SDL_FreeSurface(scaledSurf);
             return;
         }
 
         TEX::bind(gl.tex);
         TEX::uploadImage(gl.width, gl.height, scaledSurf->pixels, GL_RGBA);
+        FBO::bind(prevFBO);
         SDL_FreeSurface(scaledSurf);
 
         fprintf(stderr,
