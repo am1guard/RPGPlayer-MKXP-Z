@@ -555,6 +555,14 @@ findFontsFolderCB(void *data, const char *, const char *fname) {
 
   if (strcmp(buffer, "fonts") == 0)
     PHYSFS_enumerate(fname, fontSetEnumCB, data);
+  else
+    /* Games often ship their font loose next to Game.exe instead of
+     * inside a Fonts/ folder (e.g. Feuergruen's PokemonDE.ttf); on
+     * Windows those are installed system-wide so the game finds them.
+     * Register root-level font files too. fontSetEnumCB skips non-font
+     * extensions itself; its result is deliberately ignored so one
+     * unreadable entry cannot abort the rest of the root scan. */
+    fontSetEnumCB(data, "", fname);
 
   return PHYSFS_ENUM_OK;
 }
