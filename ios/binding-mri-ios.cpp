@@ -4417,35 +4417,79 @@ end
                         std::vector<SyntaxErrorTarget> targets = extractSyntaxErrorTargets(msgStr);
                         
                         if (!targets.empty()) {
-                            // Get the original script content
+                            // Ruby 1.8 scripts can contain MULTIPLE method-level
+                            // break/next/retry statements. Prism reports only the
+                            // FIRST syntax error per parse, so a single pass fixes
+                            // one line and the next invalid statement re-raises.
+                            // Iterate: fix the flagged line(s), re-eval, and keep
+                            // fixing while a NEW recoverable SyntaxError (Invalid
+                            // break/next/retry/else) appears, until the script
+                            // parses or a non-recoverable error is hit. Bounded by
+                            // an iteration cap and a no-progress guard so a script
+                            // with many method-level break/next lines (e.g. Pokemon
+                            // Iberia's PokeBattle_MoveEffects) is fully recovered
+                            // instead of skipped after the first fix.
                             std::string scriptContent = RSTRING_PTR(scriptDecoded);
-                            
-                            // Apply targeted fix
-                            scriptContent = applyTargetedSyntaxRecovery(scriptContent, targets, scriptName);
-                            
-                            // Re-apply preprocessing to the fixed script
-                            scriptContent = applyScriptPreprocessing(scriptContent, scriptName);
-                            
-                            // Clear the error and retry with the fixed script
+                            std::vector<SyntaxErrorTarget> curTargets = targets;
+                            bool recovered = false;
+                            int lastFlaggedLine = -1;
+                            const int maxRecoveryPasses = 500;
+
+                            for (int pass = 0; pass < maxRecoveryPasses; pass++) {
+                                // Apply targeted fix for the currently flagged line(s)
+                                scriptContent = applyTargetedSyntaxRecovery(scriptContent, curTargets, scriptName);
+
+                                // Re-apply preprocessing to the fixed script
+                                std::string processed = applyScriptPreprocessing(scriptContent, scriptName);
+
+                                // Clear the error and retry with the fixed script
+                                rb_set_errinfo(Qnil);
+                                VALUE fixedString = rb_utf8_str_new_cstr(processed.c_str());
+                                int retryState;
+                                evalString(fixedString, fname, &retryState);
+
+                                if (retryState == 0) {
+                                    recovered = true;
+                                    break;
+                                }
+
+                                // Still failed - is the NEW error another recoverable SyntaxError?
+                                VALUE retryExc = rb_errinfo();
+                                if (retryExc == Qnil || !mkxpRubyObjIsKindOfSafe(retryExc, rb_eException)) {
+                                    break;
+                                }
+                                VALUE retryClassV = rb_class_name(rb_obj_class(retryExc));
+                                VALUE retryMsgV = rb_funcall(retryExc, rb_intern("message"), 0);
+                                const char* retryClassStr = StringValueCStr(retryClassV);
+                                const char* retryMsgStr = StringValueCStr(retryMsgV);
+
+                                bool recoverable = (strstr(retryClassStr, "SyntaxError") != nullptr) &&
+                                                   (strstr(retryMsgStr, "Invalid next") != nullptr ||
+                                                    strstr(retryMsgStr, "Invalid break") != nullptr ||
+                                                    strstr(retryMsgStr, "unexpected else") != nullptr ||
+                                                    strstr(retryMsgStr, "unexpected `else'") != nullptr ||
+                                                    strstr(retryMsgStr, "Invalid retry") != nullptr);
+                                if (!recoverable) {
+                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", retryMsgStr);
+                                    break;
+                                }
+
+                                // Extract the next flagged line(s); stop if no progress
+                                curTargets = extractSyntaxErrorTargets(retryMsgStr);
+                                if (curTargets.empty()) break;
+                                if (curTargets.size() == 1 && curTargets[0].line == lastFlaggedLine) {
+                                    fprintf(stderr, "[MKXP-Z] Auto-fix stalled at line %d in '%s'\n", lastFlaggedLine, scriptName);
+                                    break;
+                                }
+                                lastFlaggedLine = curTargets[0].line;
+                            }
+
                             rb_set_errinfo(Qnil);
-                            VALUE fixedString = rb_utf8_str_new_cstr(scriptContent.c_str());
-                            int retryState;
-                            evalString(fixedString, fname, &retryState);
-                            
-	                            if (retryState == 0) {
-	                                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Fixed SyntaxError in '%s' (patched flagged line(s))\n", i, scriptCount, scriptName);
-	                                continue;
-	                            } else {
-	                                // Still failed after fix
-	                                VALUE retryExc = rb_errinfo();
-	                                if (retryExc != Qnil && mkxpRubyObjIsKindOfSafe(retryExc, rb_eException)) {
-	                                    VALUE retryMsg = rb_funcall(retryExc, rb_intern("message"), 0);
-	                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", StringValueCStr(retryMsg));
-	                                } else if (retryExc != Qnil) {
-	                                    fprintf(stderr, "[MKXP-Z] Auto-fix failed with non-exception Ruby errinfo (state=%d)\n", retryState);
-	                                }
-	                                rb_set_errinfo(Qnil);
-	                                fprintf(stderr, "[MKXP-Z] SKIPPING script after failed auto-fix: %s\n", scriptName);
+                            if (recovered) {
+                                fprintf(stderr, "[MKXP-Z] [%03ld/%ld] Fixed SyntaxError in '%s' (patched flagged line(s))\n", i, scriptCount, scriptName);
+                                continue;
+                            } else {
+                                fprintf(stderr, "[MKXP-Z] SKIPPING script after failed auto-fix: %s\n", scriptName);
                                 continue;
                             }
                         }
