@@ -3987,6 +3987,16 @@ if Object.const_defined?(:Win32API)
   # Define global Proc for checking key state (avoids scope issues with define_method)
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
+      # Mouse buttons: VK_LBUTTON(0x01)/VK_RBUTTON(0x02)/VK_MBUTTON(0x04) are not
+      # keyboard scancodes; bridge them to the native pointer state via Input.pressex?
+      # (0x1=MouseLeft, 0x2=MouseRight, 0x4=MouseMiddle). EventThread::mouseState is
+      # fed by BOTH touch (SDL_FINGER -> left button) and physical mouse (GCMouse /
+      # pointer -> left/right/middle), so VX Ace Win32API mouse scripts (Woratana/Seph
+      # "Mouse System") that poll GetAsyncKeyState(VK_LBUTTON/RBUTTON) now detect
+      # clicks. Placed before raw_key_states because it needs no key-state buffer.
+      if vk_code == 0x01 || vk_code == 0x02 || vk_code == 0x04
+        return (Input.pressex?(vk_code) ? 1 : 0) rescue 0
+      end
       states = Input.raw_key_states rescue nil
       return 0 unless states
       
@@ -4200,6 +4210,16 @@ if Object.const_defined?(:Win32API)
   # Define global Proc for checking key state (avoids scope issues with define_method)
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
+      # Mouse buttons: VK_LBUTTON(0x01)/VK_RBUTTON(0x02)/VK_MBUTTON(0x04) are not
+      # keyboard scancodes; bridge them to the native pointer state via Input.pressex?
+      # (0x1=MouseLeft, 0x2=MouseRight, 0x4=MouseMiddle). EventThread::mouseState is
+      # fed by BOTH touch (SDL_FINGER -> left button) and physical mouse (GCMouse /
+      # pointer -> left/right/middle), so VX Ace Win32API mouse scripts (Woratana/Seph
+      # "Mouse System") that poll GetAsyncKeyState(VK_LBUTTON/RBUTTON) now detect
+      # clicks. Placed before raw_key_states because it needs no key-state buffer.
+      if vk_code == 0x01 || vk_code == 0x02 || vk_code == 0x04
+        return (Input.pressex?(vk_code) ? 1 : 0) rescue 0
+      end
       states = Input.raw_key_states rescue nil
       return 0 unless states
       
