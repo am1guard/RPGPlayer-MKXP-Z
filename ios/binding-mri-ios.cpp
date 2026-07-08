@@ -3677,6 +3677,18 @@ static std::vector<SyntaxErrorTarget> extractSyntaxErrorTargets(const std::strin
         if (text.find("Invalid retry") != std::string::npos) {
             return "retry";
         }
+        // Ruby 1.8 allowed brace-delimited hashes whose elements used "="
+        // as an implicit association separator, e.g. { area= "", pkmn= [] }.
+        // Ruby 1.9+/Prism rejects this: "expected a `=>` between the hash key
+        // and value". Old Pokemon Essentials / RPG Maker XP scripts (e.g.
+        // Pokemon Decimation's PokemonDexNav) use this idiom for throwaway
+        // init hashes. We convert the flagged "key= value" separator to a
+        // symbol label ("key: value"): it parses AND stays inert, whereas a
+        // naive "=>" conversion parses but raises NameError at runtime (the
+        // keys are undefined locals).
+        if (text.find("between the hash key and value") != std::string::npos) {
+            return "assoc";
+        }
         return "";
     };
 
@@ -3737,6 +3749,21 @@ static std::string applyTargetedSyntaxRecovery(const std::string& script, const 
                 std::regex retryPattern(R"(\bretry\b)");
                 line = std::regex_replace(line, retryPattern, "redo");
                 fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': replaced 'retry' with 'redo'\n", currentLine, scriptName.c_str());
+            } else if (type == "assoc") {
+                // Convert a Ruby 1.8 implicit-association hash element
+                // "key= value" at a hash-element position (line start, or
+                // after "{" / ",") to the modern symbol-label form
+                // "key: value". A "=>" conversion would parse but raise
+                // NameError at runtime because the keys are undefined locals;
+                // the label form keeps it parseable and inert (these init
+                // hashes are overwritten before use). The first lookahead
+                // (?![=>~]) leaves compound operators (==, =>, =~) and
+                // already-fixed lines untouched (idempotent). The second
+                // lookahead (?!\s*\{) leaves a hash-assignment head like
+                // "enc= { ... }" untouched so only true keys become labels.
+                std::regex assocPattern(R"((^|,|\{)(\s*)([A-Za-z_]\w*)\s*=(?![=>~])(?!\s*\{))");
+                line = std::regex_replace(line, assocPattern, "$1$2$3:");
+                fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': converted hash '=' to ':' (symbol key)\n", currentLine, scriptName.c_str());
             }
         }
         
@@ -4429,7 +4456,8 @@ end
                     if (strstr(classStr, "SyntaxError") != nullptr &&
                         (strstr(msgStr, "Invalid next") != nullptr || strstr(msgStr, "Invalid break") != nullptr ||
                          strstr(msgStr, "unexpected else") != nullptr || strstr(msgStr, "unexpected `else'") != nullptr ||
-                         strstr(msgStr, "Invalid retry") != nullptr)) {
+                         strstr(msgStr, "Invalid retry") != nullptr ||
+                         strstr(msgStr, "between the hash key and value") != nullptr)) {
                         
                         fprintf(stderr, "[MKXP-Z] Detected SyntaxError in '%s', attempting targeted auto-fix...\n", scriptName);
                         
@@ -4488,7 +4516,8 @@ end
                                                     strstr(retryMsgStr, "Invalid break") != nullptr ||
                                                     strstr(retryMsgStr, "unexpected else") != nullptr ||
                                                     strstr(retryMsgStr, "unexpected `else'") != nullptr ||
-                                                    strstr(retryMsgStr, "Invalid retry") != nullptr);
+                                                    strstr(retryMsgStr, "Invalid retry") != nullptr ||
+                                                    strstr(retryMsgStr, "between the hash key and value") != nullptr);
                                 if (!recoverable) {
                                     fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", retryMsgStr);
                                     break;
