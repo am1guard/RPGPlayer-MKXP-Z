@@ -82,6 +82,7 @@ public:
     DECL_ATTR( Frameskip, bool )
     DECL_ATTR( FixedAspectRatio, bool )
     DECL_ATTR( SmoothScaling, int )
+    DECL_ATTR( BitmapSmoothScaling, int )
     DECL_ATTR( IntegerScaling, bool )
     DECL_ATTR( LastMileScaling, bool )
     DECL_ATTR( Threadsafe, bool )

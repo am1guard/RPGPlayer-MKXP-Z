@@ -1093,6 +1093,7 @@ struct GraphicsPrivate {
             int scaleIsSpecial = GLMeta::blitScaleIsSpecial(integerScaleBuffer, false, IntRect(0, 0, integerScaleBuffer.width, integerScaleBuffer.height), screen.getPP().frontBuffer(), IntRect(0, 0, scRes.x, scRes.y));
 
             assert(integerScaleBuffer.tex != TEX::ID(0));
+            GLMeta::setBlitFilterOverride(NearestNeighbor); // RPGPlayer: prescale DAIMA keskin NN (integer taban)
             GLMeta::blitBegin(integerScaleBuffer, false, scaleIsSpecial);
             GLMeta::blitSource(screen.getPP().frontBuffer(), scaleIsSpecial);
             
@@ -1101,6 +1102,7 @@ struct GraphicsPrivate {
                                   false);
             
             GLMeta::blitEnd();
+            GLMeta::setBlitFilterOverride(-1); // RPGPlayer: prescale override temizle
         }
         
 
@@ -1732,6 +1734,16 @@ int Graphics::getSmoothScaling() const
 void Graphics::setSmoothScaling(int value)
 {
     shState->config().smoothScaling = value;
+}
+
+int Graphics::getBitmapSmoothScaling() const
+{
+    return shState->config().bitmapSmoothScaling;
+}
+
+void Graphics::setBitmapSmoothScaling(int value)
+{
+    shState->config().bitmapSmoothScaling = value;
 }
 
 bool Graphics::getIntegerScaling() const

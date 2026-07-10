@@ -403,6 +403,7 @@ DEF_GRA_PROP_F(Scale)
 DEF_GRA_PROP_B(Frameskip)
 DEF_GRA_PROP_B(FixedAspectRatio)
 DEF_GRA_PROP_I(SmoothScaling)
+DEF_GRA_PROP_I(BitmapSmoothScaling)
 DEF_GRA_PROP_B(IntegerScaling)
 DEF_GRA_PROP_B(LastMileScaling)
 DEF_GRA_PROP_B(Threadsafe)
@@ -457,6 +458,7 @@ void graphicsBindingInit()
     INIT_GRA_PROP_BIND( Frameskip,        "frameskip"          );
     INIT_GRA_PROP_BIND( FixedAspectRatio, "fixed_aspect_ratio" );
     INIT_GRA_PROP_BIND( SmoothScaling,    "smooth_scaling"     );
+    INIT_GRA_PROP_BIND( BitmapSmoothScaling, "bitmap_smooth_scaling" );
     INIT_GRA_PROP_BIND( IntegerScaling,   "integer_scaling"    );
     INIT_GRA_PROP_BIND( LastMileScaling,  "last_mile_scaling"  );
     INIT_GRA_PROP_BIND( Threadsafe,       "thread_safe"        );

@@ -184,8 +184,17 @@ int blitScaleIsSpecial(TEXFBO &target, bool targetPreferHires, const IntRect &ta
 	return UpScale;
 }
 
+/* RPGPlayer upscaler: sonraki blit'lerde filtreyi zorla (>=0, InterpolationMethod)
+ * veya config'e don (-1). NN-prescale (integer prescale) ve stretch_blt decouple
+ * bunu kullanir. Tek GL thread'de senkron set/clear edilir -> race yok. */
+static int g_rpgBlitFilterOverride = -1;
+void setBlitFilterOverride(int method) { g_rpgBlitFilterOverride = method; }
+
 int smoothScalingMethod(int scaleIsSpecial)
 {
+	if (g_rpgBlitFilterOverride >= 0)
+		return g_rpgBlitFilterOverride;
+
 	switch (scaleIsSpecial)
 	{
 	case SameScale:

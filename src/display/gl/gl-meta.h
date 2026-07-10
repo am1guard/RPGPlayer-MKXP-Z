@@ -67,6 +67,7 @@ void vaoUnbind(VAO &vao);
 /* EXT_framebuffer_blit */
 int blitScaleIsSpecial(TEXFBO &target, bool targetPreferHires, const IntRect &targetRect, TEXFBO &source, const IntRect &sourceRect);
 int smoothScalingMethod(int scaleIsSpecial);
+void setBlitFilterOverride(int method); // RPGPlayer: sonraki blit filtresini zorla (>=0) / -1=config
 void blitBegin(TEXFBO &target, bool preferHires = false, int scaleIsOne = 0);
 void blitBeginScreen(const Vec2i &size, int scaleIsOne = 0);
 void blitSource(TEXFBO &source, int scaleIsOne = 0);
