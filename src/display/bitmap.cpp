@@ -2608,7 +2608,7 @@ static SDL_Surface *renderUTF8WithHangulFallbackSpacing(TTF_Font *font,
         }
 
         SDL_Rect dstRect = {
-            glyph.penX + glyph.minX - bounds.minLeft,
+            glyph.penX + std::min(glyph.minX, 0) - bounds.minLeft,
             baselineY - glyph.maxY,
             glyphSurface->w,
             glyphSurface->h
