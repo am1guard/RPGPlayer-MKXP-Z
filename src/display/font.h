@@ -48,9 +48,13 @@ public:
 	                   const std::string &filename);
 
 	_TTF_Font *getFont(std::string family,
-	                   int size, float hiresMult, int outline_size = 0);
+	                   int size, float hiresMult, int outline_size = 0,
+	                   bool useLatinFace = false);
 
 	bool fontPresent(std::string family) const;
+	int runtimeScalePercent() const;
+	unsigned int runtimeScaleGeneration() const;
+	void setRuntimeScalePercent(int percent);
 
 	static _TTF_Font *openBundled(int size);
     void setDefaultFontFamily(const std::string &family);
@@ -108,6 +112,7 @@ public:
 	static const std::vector<std::string> &getInitialDefaultNames();
     bool isSolid() const;
     bool usesBundledFallback() const;
+    bool usesCleanLatinCompat() const;
 
 	/* Assigns heap allocated objects to object properties;
 	 * using this in pure C++ will cause memory leaks
@@ -118,7 +123,7 @@ public:
 	static void initDefaults(const SharedFontState &sfs);
 
 	/* internal */
-	_TTF_Font *getSdlFont(int outline_size);
+	_TTF_Font *getSdlFont(int outline_size, bool useLatinFace = false);
 
 private:
 	FontPrivate *p;

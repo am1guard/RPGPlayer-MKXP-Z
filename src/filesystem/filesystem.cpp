@@ -452,7 +452,15 @@ static PHYSFS_EnumerateCallbackResult cacheEnumCB(void *d, const char *origdir,
      * traversing and append this filename to it */
     std::vector<std::string> &list = *data.fileLists.top();
 
-    std::string lowerFilename(fname);
+    /* Keep the per-directory leaf list in the same canonical form as fullPath
+     * and the paths requested by openRead. APFS enumerates Unicode filenames as
+     * NFD while RGSS commonly requests NFC; comparing the raw leaf bytes made a
+     * real file fail before the normalized pathCache could be consulted. */
+    char normalizedFilename[512];
+    snprintf(normalizedFilename, sizeof(normalizedFilename), "%s", fname);
+    data.toNFC(normalizedFilename);
+
+    std::string lowerFilename(normalizedFilename);
     strTolower(lowerFilename);
     list.push_back(lowerFilename);
 

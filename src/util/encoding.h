@@ -18,7 +18,7 @@
 
 namespace Encoding {
 
-static std::string getCharset(std::string &str) {
+static std::string getCharset(std::string &str, const char *emptyCharsetFallback = "UTF-8") {
     uchardet_t ud = uchardet_new();
     uchardet_handle_data(ud, str.c_str(), str.length());
     uchardet_data_end(ud);
@@ -34,18 +34,21 @@ static std::string getCharset(std::string &str) {
     // battle because Correction.rb was never preloaded).
     //
     // JSON5 mandates UTF-8 by spec, and our Swift writer (`JSONSerialization`
-    // with `.prettyPrinted`) produces UTF-8 without BOM. Falling back to
-    // UTF-8 here is therefore safe: if the file truly is non-UTF-8 the
-    // downstream `json::parse5` call will surface that as a normal parse
-    // error instead of a misleading "Unknown encoding" message.
-    if (ret.empty())
-        return "UTF-8";
+    // with `.prettyPrinted`) produces UTF-8 without BOM. UTF-8 therefore
+    // remains the default fallback, while legacy call sites such as the
+    // Windows RPG Maker Game.ini title may provide their native code page.
+    if (ret.empty()) {
+        if (strcmp(emptyCharsetFallback, "UTF-8"))
+            fprintf(stderr, "[MKXP-Z Encoding] uchardet returned no charset; using '%s' fallback\n",
+                    emptyCharsetFallback);
+        return emptyCharsetFallback;
+    }
     return ret;
 }
 
-static std::string convertString(std::string &str) {
+static std::string convertString(std::string &str, const char *emptyCharsetFallback = "UTF-8") {
 
-    std::string charset = getCharset(str);
+    std::string charset = getCharset(str, emptyCharsetFallback);
 
     // Conversion doesn't need to happen if it's already UTF-8
     if (!strcmp(charset.c_str(), "UTF-8") || !strcmp(charset.c_str(), "ASCII")) {

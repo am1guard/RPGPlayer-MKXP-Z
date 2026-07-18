@@ -42,6 +42,7 @@
 #include "shader.h"
 #include "filesystem.h"
 #include "font.h"
+#include "fontcompat.h"
 #include "eventthread.h"
 #include "graphics.h"
 #include "system.h"
@@ -2517,6 +2518,42 @@ static bool stringContainsHangul(const char *str)
     return false;
 }
 
+static bool stringCanUseLatinBundled(const char *str)
+{
+    for (const char *it = str; *it != '\0';)
+    {
+        const char *endPtr;
+        uint32_t codepoint = utf8_to_codepoint(it, &endPtr);
+
+        if (codepoint == static_cast<uint32_t>(-1) || endPtr == it)
+            return false;
+
+        if (!FontCompat::latinBundledSupports(codepoint))
+            return false;
+
+        it = endPtr;
+    }
+
+    return true;
+}
+
+static bool fontProvidesString(TTF_Font *font, const char *str)
+{
+    for (const char *it = str; *it != '\0';)
+    {
+        const char *endPtr;
+        uint32_t codepoint = utf8_to_codepoint(it, &endPtr);
+
+        if (codepoint == static_cast<uint32_t>(-1) || endPtr == it ||
+            !TTF_GlyphIsProvided32(font, codepoint))
+            return false;
+
+        it = endPtr;
+    }
+
+    return true;
+}
+
 static bool needsHangulFallbackSpacing(const Font *font, const char *str)
 {
     return font && font->usesBundledFallback() && stringContainsHangul(str);
@@ -2657,7 +2694,15 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
     if (str[0] == ' ' && str[1] == '\0')
         return;
     
-    TTF_Font *sdlFont = p->font->getSdlFont(0);
+    bool useLatinBundled = (p->font->usesBundledFallback() ||
+                            p->font->usesCleanLatinCompat()) &&
+                           stringCanUseLatinBundled(str);
+    TTF_Font *sdlFont = p->font->getSdlFont(0, useLatinBundled);
+    if (useLatinBundled && !fontProvidesString(sdlFont, str))
+    {
+        useLatinBundled = false;
+        sdlFont = p->font->getSdlFont(0, false);
+    }
     const Color &fontColor = p->font->getColor();
     const Color &outColor = p->font->getOutColor();
     
@@ -2830,12 +2875,13 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
 
         p->ensureFormat(txtSurf, SDL_PIXELFORMAT_ABGR8888);
 
-        /* Fallback-font synthetic bold (see emboldenSurfaceAlpha). Applied
+        /* CJK/WQY fallback synthetic bold (see emboldenSurfaceAlpha). Applied
          * before the shadow so the shadow derives from the fattened glyphs.
-         * FontHeight/11 tracks SDL_ttf's own bold overhang (ppem/10) for the
-         * bundled font's metrics: ppem 18 -> 1px, ppem 20+ -> 2px. */
+         * Latin/Liberation stays at its natural Regular weight. FontHeight/11
+         * tracks SDL_ttf's bold overhang (ppem/10) for the WQY metrics:
+         * ppem 18 -> 1px, ppem 20+ -> 2px. */
         int fallbackBoldOverhang = 0;
-        if (p->font->usesBundledFallback())
+        if (p->font->usesBundledFallback() && !useLatinBundled)
         {
             fallbackBoldOverhang = clamp(TTF_FontHeight(sdlFont) / 11, 1, 3);
             emboldenSurfaceAlpha(txtSurf, fallbackBoldOverhang);
@@ -2860,7 +2906,7 @@ void Bitmap::drawText(const IntRect &rect, const char *str, int align)
             SDL_Surface *outline;
             TTF_Font *sdlOutline;
             try {
-                sdlOutline = p->font->getSdlFont(scaledOutlineSize);
+                sdlOutline = p->font->getSdlFont(scaledOutlineSize, useLatinBundled);
             } catch (const Exception &e) {
                 SDL_FreeSurface(txtSurf);
                 throw e;
@@ -3085,13 +3131,20 @@ IntRect Bitmap::textSize(const char *str)
     // TODO: High-res Bitmap textSize not implemented, but I think it's the same as low-res?
     // Need to double-check this.
 
-    TTF_Font *sdlFont = p->font->getSdlFont(0);
-    
     // freetype sometimes treats the last character of the string as being
     // a pixel wider than it should be. Adding a space at the end and then
     // removing it's width should make character-by-character text
     // more accurate.
     std::string fixedBase = fixupString(str);
+    bool useLatinBundled = (p->font->usesBundledFallback() ||
+                            p->font->usesCleanLatinCompat()) &&
+                           stringCanUseLatinBundled(fixedBase.c_str());
+    TTF_Font *sdlFont = p->font->getSdlFont(0, useLatinBundled);
+    if (useLatinBundled && !fontProvidesString(sdlFont, fixedBase.c_str()))
+    {
+        useLatinBundled = false;
+        sdlFont = p->font->getSdlFont(0, false);
+    }
     std::string fixed = fixedBase + " ";
     
     int w, h;

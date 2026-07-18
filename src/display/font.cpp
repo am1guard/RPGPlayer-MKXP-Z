@@ -20,6 +20,8 @@
 */
 
 #include "font.h"
+#include "fontcompat.h"
+#include "fontscale.h"
 
 #include <SDL_ttf.h>
 #include <ft2build.h>
@@ -73,9 +75,10 @@ BUNDLED_FONT_DECL(liberation)
 
 //#endif
 
-static SDL_RWops *openBundledFont()
+static SDL_RWops *openBundledFont(bool useLatinFace)
 {
-	std::string customFontPath = mkxp_fs::getPathForAsset("wqymicrohei", "ttf");
+	const char *assetName = useLatinFace ? "liberation" : "wqymicrohei";
+	std::string customFontPath = mkxp_fs::getPathForAsset(assetName, "ttf");
 	if (!customFontPath.empty())
 	{
 		SDL_RWops *ops = SDL_RWFromFile(customFontPath.c_str(), "rb");
@@ -85,6 +88,11 @@ static SDL_RWops *openBundledFont()
 			return ops;
 		}
 	}
+
+#ifndef MKXPZ_CJK_FONT
+	if (useLatinFace)
+		return SDL_RWFromConstMem(BNDL_F_D(liberation), BNDL_F_L(liberation));
+#endif
 
 //#ifndef MKXPZ_BUILD_XCODE
     return SDL_RWFromConstMem(BNDL_F_D(BUNDLED_FONT), BNDL_F_L(BUNDLED_FONT));
@@ -130,6 +138,8 @@ struct SharedFontStatePrivate
     std::string defaultFamily;
 
 	float fontScale;
+	int runtimeScalePercent;
+	unsigned int runtimeScaleGeneration;
 	bool fontKerning;
 	int fontHinting;
 };
@@ -158,6 +168,8 @@ SharedFontState::SharedFontState(const Config &conf)
 	{
 		p->fontScale = 1.0f;
 	}
+	p->runtimeScalePercent = FontScale::defaultPercent;
+	p->runtimeScaleGeneration = 1;
 	p->fontKerning = conf.fontKerning;
 	p->fontHinting = conf.fontHinting;
 }
@@ -455,7 +467,8 @@ static int calc_ppem_for_height(Font_Container *font, int height)
 /* /wine */
 
 _TTF_Font *SharedFontState::getFont(std::string family,
-                                    int size, float hiresMult, int outline_size)
+                                    int size, float hiresMult, int outline_size,
+                                    bool useLatinFace)
 {
 	std::transform(family.begin(), family.end(), family.begin(),
 		[](unsigned char c){ return std::tolower(c); });
@@ -467,6 +480,12 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 	if (p->subs.contains(family))
 		family = p->subs[family];
 
+	/* This game font exposes a physical Semibold face as legacy Regular.
+	 * Keep the compatibility exact and let explicit fontSub entries above
+	 * retain priority. */
+	if (useLatinFace && FontCompat::useCleanLatinFamily(family))
+		family.clear();
+
 	/* Find out if the font asset exists */
 	const FontSet &req = p->sets[family];
 
@@ -476,7 +495,14 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 		family = "";
 	}
 
-	FontSizeKey key(family, size);
+	std::string cacheFamily = family;
+	if (cacheFamily.empty() && useLatinFace)
+		cacheFamily = "\x1fmkxpz-latin-bundled";
+	if (p->runtimeScalePercent != FontScale::defaultPercent)
+		cacheFamily += "\x1fmkxpz-font-scale-" +
+		               std::to_string(p->runtimeScalePercent);
+
+	FontSizeKey key(cacheFamily, size);
 
 	TTF_Font *font;
 	int &ppem = p->size_to_ppem[key];
@@ -485,7 +511,7 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 	if (ppem != 0)
 	{
 		ppemMult = std::max<int>(ppem * hiresMult, 1);
-		auto &group = p->ppem_to_font[FontPPEMKey(family, ppemMult)];
+		auto &group = p->ppem_to_font[FontPPEMKey(cacheFamily, ppemMult)];
 		if(outline_size == 0)
 			font = group[0];
 		else
@@ -505,7 +531,7 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 	if (family.empty())
 	{
 		/* Built-in font */
-		ops = openBundledFont();
+		ops = openBundledFont(useLatinFace);
 	}
 	else
 	{
@@ -522,8 +548,13 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 			/* Font file not found - fall back to bundled font */
 			Debug() << "Font file not found, using fallback:" << path;
 			family = "";
-			key = FontSizeKey(family, size);
-			ops = openBundledFont();
+			useLatinFace = false;
+			cacheFamily = family;
+			if (p->runtimeScalePercent != FontScale::defaultPercent)
+				cacheFamily += "\x1fmkxpz-font-scale-" +
+				               std::to_string(p->runtimeScalePercent);
+			key = FontSizeKey(cacheFamily, size);
+			ops = openBundledFont(useLatinFace);
 		}
 	}
 
@@ -546,7 +577,8 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 				if (!c.ppem)
 					c.ppem = calc_ppem_for_height( &c, size );
 
-				ppem = std::max<int>(c.ppem * p->fontScale, 1);
+				ppem = std::max<int>(c.ppem * FontScale::effectiveScale(
+				                         p->fontScale, p->runtimeScalePercent), 1);
 				ppemMult = std::max<int>(ppem * hiresMult, 1);
 			}
 			if (TTF_SetFontSize(font, ppemMult))
@@ -560,7 +592,8 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 			 * the mkxp method for now. */
 			if (ppem == 0)
 			{
-				ppem = std::max<int>(size * p->fontScale, 5);
+				ppem = std::max<int>(size * FontScale::effectiveScale(
+				                         p->fontScale, p->runtimeScalePercent), 5);
 				ppemMult = std::max<int>(ppem * hiresMult, 1);
 			}
 			if (TTF_SetFontSize(font, ppemMult))
@@ -582,7 +615,7 @@ _TTF_Font *SharedFontState::getFont(std::string family,
 		throw Exception(Exception::SDLError, "%s", SDL_GetError());
 	}
 	
-	auto &group = p->ppem_to_font[FontPPEMKey(family, std::max<int>(ppem * hiresMult, 1))];
+	auto &group = p->ppem_to_font[FontPPEMKey(cacheFamily, std::max<int>(ppem * hiresMult, 1))];
 	if(outline_size == 0)
 	{
 		group[0] = font;
@@ -612,9 +645,29 @@ bool SharedFontState::fontPresent(std::string family) const
 	return !(set.regular.empty() && set.other.empty());
 }
 
+int SharedFontState::runtimeScalePercent() const
+{
+	return p->runtimeScalePercent;
+}
+
+unsigned int SharedFontState::runtimeScaleGeneration() const
+{
+	return p->runtimeScaleGeneration;
+}
+
+void SharedFontState::setRuntimeScalePercent(int percent)
+{
+	const int normalized = FontScale::normalizePercent(percent);
+	if (normalized == p->runtimeScalePercent)
+		return;
+
+	p->runtimeScalePercent = normalized;
+	++p->runtimeScaleGeneration;
+}
+
 _TTF_Font *SharedFontState::openBundled(int size)
 {
-	SDL_RWops *ops = openBundledFont();
+	SDL_RWops *ops = openBundledFont(false);
 
 	return TTF_OpenFontRW(ops, 1, size);
 }
@@ -694,6 +747,9 @@ struct FontPrivate
 	 * set to null */
 	TTF_Font *sdlFont;
 	TTF_Font *sdlFontOutline;
+	TTF_Font *sdlLatinFont;
+	TTF_Font *sdlLatinFontOutline;
+	unsigned int fontScaleGeneration;
     
     bool isSolid;
 
@@ -710,6 +766,9 @@ struct FontPrivate
 	      outColorTmp(*defaultOutColor),
 	      sdlFont(0),
 	      sdlFontOutline(0),
+	      sdlLatinFont(0),
+	      sdlLatinFontOutline(0),
+	      fontScaleGeneration(0),
           isSolid(false)
 	{}
 
@@ -727,20 +786,28 @@ struct FontPrivate
 	      outColorTmp(*other.outColor),
 	      sdlFont(other.sdlFont),
 	      sdlFontOutline(other.sdlFontOutline),
+	      sdlLatinFont(other.sdlLatinFont),
+	      sdlLatinFontOutline(other.sdlLatinFontOutline),
+	      fontScaleGeneration(other.fontScaleGeneration),
           isSolid(false)
 	{}
 
 	void operator=(const FontPrivate &o)
 	{
-		if (size != o.size || name != o.name)
+		if (size != o.size || name != o.name ||
+		    fontScaleGeneration != o.fontScaleGeneration)
 		{
 			sdlFont = 0;
 			sdlFontOutline = 0;
+			sdlLatinFont = 0;
+			sdlLatinFontOutline = 0;
 		}
 		if (hiresMult == o.hiresMult)
 		{
 			sdlFont = sdlFont == 0 ? o.sdlFont : sdlFont;
 			sdlFontOutline = sdlFontOutline == 0 ? o.sdlFontOutline : sdlFontOutline;
+			sdlLatinFont = sdlLatinFont == 0 ? o.sdlLatinFont : sdlLatinFont;
+			sdlLatinFontOutline = sdlLatinFontOutline == 0 ? o.sdlLatinFontOutline : sdlLatinFontOutline;
 		}
 
 		 name     =  o.name;
@@ -751,6 +818,7 @@ struct FontPrivate
 		 shadow   =  o.shadow;
 		*color    = *o.color;
 		*outColor = *o.outColor;
+		 fontScaleGeneration = o.fontScaleGeneration;
 
         isSolid = o.isSolid;
 	}
@@ -777,6 +845,14 @@ bool Font::isSolid() const {
 bool Font::usesBundledFallback() const
 {
     return p->name.empty();
+}
+
+bool Font::usesCleanLatinCompat() const
+{
+	std::string family = p->name;
+	std::transform(family.begin(), family.end(), family.begin(),
+		[](unsigned char c){ return std::tolower(c); });
+	return FontCompat::useCleanLatinFamily(family);
 }
 
 bool Font::doesExist(const char *name)
@@ -821,6 +897,8 @@ void Font::setName(const std::vector<std::string> &names)
 	{
 		p->sdlFont = 0;
 		p->sdlFontOutline = 0;
+		p->sdlLatinFont = 0;
+		p->sdlLatinFontOutline = 0;
 	}
 	p->isSolid = strcmp(p->name.c_str(), "") && shState->config().fontIsSolid(p->name.c_str());
 }
@@ -840,6 +918,8 @@ void Font::setSize(int value, bool checkIllegal)
 	p->size = value;
 	p->sdlFont = 0;
 	p->sdlFontOutline = 0;
+	p->sdlLatinFont = 0;
+	p->sdlLatinFontOutline = 0;
 }
 
 void Font::setHiresMult(float value)
@@ -850,6 +930,8 @@ void Font::setHiresMult(float value)
 	p->hiresMult = value;
 	p->sdlFont = 0;
 	p->sdlFontOutline = 0;
+	p->sdlLatinFont = 0;
+	p->sdlLatinFontOutline = 0;
 }
 
 static void guardDisposed() {}
@@ -928,17 +1010,32 @@ void Font::initDefaults(const SharedFontState &sfs)
 	FontPrivate::defaultShadow  = (rgssVer == 2 ? true : false);
 }
 
-_TTF_Font *Font::getSdlFont(int outline_size)
+_TTF_Font *Font::getSdlFont(int outline_size, bool useLatinFace)
 {
+	const unsigned int generation = shState->fontState().runtimeScaleGeneration();
+	if (p->fontScaleGeneration != generation)
+	{
+		p->sdlFont = 0;
+		p->sdlFontOutline = 0;
+		p->sdlLatinFont = 0;
+		p->sdlLatinFontOutline = 0;
+		p->fontScaleGeneration = generation;
+	}
+
 	_TTF_Font **font;
-	if (outline_size == 0)
+	if (useLatinFace && outline_size == 0)
+		font = &p->sdlLatinFont;
+	else if (useLatinFace)
+		font = &p->sdlLatinFontOutline;
+	else if (outline_size == 0)
 		font = &p->sdlFont;
 	else
 		font = &p->sdlFontOutline;
 
 	if (!*font)
 		*font = shState->fontState().getFont(p->name.c_str(),
-		                                     p->size, p->hiresMult, outline_size);
+		                                     p->size, p->hiresMult, outline_size,
+		                                     useLatinFace);
 
 	if(outline_size && TTF_GetFontOutline(*font) != outline_size)
 		TTF_SetFontOutline(*font, outline_size);

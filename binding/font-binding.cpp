@@ -63,6 +63,19 @@ RB_METHOD(fontDoesExist) {
   return rb_bool_new(Font::doesExist(name));
 }
 
+RB_METHOD(fontGetRuntimeScalePercent) {
+  RB_UNUSED_PARAM;
+  return rb_fix_new(shState->fontState().runtimeScalePercent());
+}
+
+RB_METHOD(fontSetRuntimeScalePercent) {
+  RB_UNUSED_PARAM;
+  int percent;
+  rb_get_args(argc, argv, "i", &percent RB_ARG_END);
+  shState->fontState().setRuntimeScalePercent(percent);
+  return rb_fix_new(shState->fontState().runtimeScalePercent());
+}
+
 RB_METHOD(FontSetName);
 
 RB_METHOD(fontInitialize) {
@@ -290,6 +303,8 @@ void fontBindingInit() {
   }
 
   rb_define_class_method(klass, "exist?", fontDoesExist);
+  rb_define_class_method(klass, "runtime_scale_percent", fontGetRuntimeScalePercent);
+  rb_define_class_method(klass, "runtime_scale_percent=", fontSetRuntimeScalePercent);
 
   _rb_define_method(klass, "initialize", fontInitialize);
   _rb_define_method(klass, "initialize_copy", fontInitializeCopy);

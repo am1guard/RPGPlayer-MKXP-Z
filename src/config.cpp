@@ -442,7 +442,7 @@ void Config::readGameINI() {
     }
     
     try {
-        game.title = Encoding::convertString(game.title);
+        game.title = Encoding::convertString(game.title, "CP932");
         convSuccess = true;
     }
     catch (const Exception &e) {

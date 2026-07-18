@@ -38,6 +38,18 @@
 #include <string.h>
 #include <assert.h>
 
+extern "C" void mkxpz_begin_library_input_sample(void);
+extern "C" void mkxpz_finish_library_input_sample(void);
+
+namespace
+{
+struct InjectedKeySampleScope
+{
+    InjectedKeySampleScope() { mkxpz_begin_library_input_sample(); }
+    ~InjectedKeySampleScope() { mkxpz_finish_library_input_sample(); }
+};
+}
+
 #define BUTTON_CODE_COUNT 26
 
 #define m(vk,sc) { vk, SDL_SCANCODE_##sc }
@@ -1207,6 +1219,7 @@ void Input::update()
 {
     shState->checkShutdown();
     p->checkBindingChange(shState->rtData());
+    InjectedKeySampleScope injectedKeySampleScope;
     
     p->swapBuffers();
     p->clearBuffer();
