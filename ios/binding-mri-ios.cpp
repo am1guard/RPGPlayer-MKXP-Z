@@ -3635,7 +3635,7 @@ RB_METHOD_GUARD_END
 
 struct SyntaxErrorTarget {
     int line;
-    std::string type; // "next", "break", "else"
+    std::string type; // "next", "break", "else", "retry", "assoc", "if_colon"
 };
 
 static void appendSyntaxErrorTarget(std::vector<SyntaxErrorTarget>& targets, int lineNum, const std::string& type) {
@@ -3688,6 +3688,15 @@ static std::vector<SyntaxErrorTarget> extractSyntaxErrorTargets(const std::strin
         // keys are undefined locals).
         if (text.find("between the hash key and value") != std::string::npos) {
             return "assoc";
+        }
+        // Ruby 1.8 accepted a colon as the separator in a single-line
+        // conditional (`if condition : statement end`). Modern Prism rejects
+        // that exact separator. Keep this reactive and line-targeted: a normal
+        // symbol/hash/ternary colon never enters recovery unless the parser
+        // itself flags the line as an unexpected colon.
+        if (text.find("unexpected ':'") != std::string::npos ||
+            text.find("unexpected `:'") != std::string::npos) {
+            return "if_colon";
         }
         return "";
     };
@@ -3764,6 +3773,20 @@ static std::string applyTargetedSyntaxRecovery(const std::string& script, const 
                 std::regex assocPattern(R"((^|,|\{)(\s*)([A-Za-z_]\w*)\s*=(?![=>~])(?!\s*\{))");
                 line = std::regex_replace(line, assocPattern, "$1$2$3:");
                 fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': converted hash '=' to ':' (symbol key)\n", currentLine, scriptName.c_str());
+            } else if (type == "if_colon") {
+                // Convert only the old one-line conditional shape reported by
+                // Prism. Requiring an if/unless head, whitespace around the
+                // separator and a same-line `end` leaves namespace, symbol,
+                // hash-label and ternary colons untouched.
+                std::regex ifColonPattern(
+                    R"(^(\s*(?:if|unless)\s+.*?)\s+:(?!:)\s*(.+\s+end\s*(?:#.*)?)$)"
+                );
+                std::string recoveredLine = std::regex_replace(
+                    line, ifColonPattern, "$1 then $2");
+                if (recoveredLine != line) {
+                    line = recoveredLine;
+                    fprintf(stderr, "[MKXP-Z] SYNTAX RECOVERY: Line %d in '%s': replaced legacy conditional ':' with 'then'\n", currentLine, scriptName.c_str());
+                }
             }
         }
         
@@ -4448,7 +4471,7 @@ end
                     fprintf(stderr, "[MKXP-Z] Exception: %s: %s\n", classStr, msgStr);
                     
                     // =================================================================
-                    // "Invalid next" / "Invalid break" / "unexpected else" SyntaxError Auto-Fix
+                    // Targeted legacy SyntaxError auto-fix
                     // =================================================================
                     // Modern Ruby's Prism parser rejects next/break inside def blocks.
                     // Older RPG Maker scripts sometimes use next/break where return
@@ -4457,7 +4480,8 @@ end
                         (strstr(msgStr, "Invalid next") != nullptr || strstr(msgStr, "Invalid break") != nullptr ||
                          strstr(msgStr, "unexpected else") != nullptr || strstr(msgStr, "unexpected `else'") != nullptr ||
                          strstr(msgStr, "Invalid retry") != nullptr ||
-                         strstr(msgStr, "between the hash key and value") != nullptr)) {
+                         strstr(msgStr, "between the hash key and value") != nullptr ||
+                         strstr(msgStr, "unexpected ':'") != nullptr || strstr(msgStr, "unexpected `:'") != nullptr)) {
                         
                         fprintf(stderr, "[MKXP-Z] Detected SyntaxError in '%s', attempting targeted auto-fix...\n", scriptName);
                         
@@ -4517,7 +4541,9 @@ end
                                                     strstr(retryMsgStr, "unexpected else") != nullptr ||
                                                     strstr(retryMsgStr, "unexpected `else'") != nullptr ||
                                                     strstr(retryMsgStr, "Invalid retry") != nullptr ||
-                                                    strstr(retryMsgStr, "between the hash key and value") != nullptr);
+                                                    strstr(retryMsgStr, "between the hash key and value") != nullptr ||
+                                                    strstr(retryMsgStr, "unexpected ':'") != nullptr ||
+                                                    strstr(retryMsgStr, "unexpected `:'") != nullptr);
                                 if (!recoverable) {
                                     fprintf(stderr, "[MKXP-Z] Auto-fix failed, new error: %s\n", retryMsgStr);
                                     break;

@@ -442,7 +442,11 @@ void Config::readGameINI() {
     }
     
     try {
-        game.title = Encoding::convertString(game.title, "CP932");
+        // Windows RPG Maker titles normally use CP932 when uchardet cannot
+        // identify a short buffer. If uchardet does return a charset but the
+        // local iconv cannot open/convert it, try the Western Windows code page
+        // before allowing raw non-UTF-8 bytes into Foundation path handling.
+        game.title = Encoding::convertString(game.title, "CP932", "CP1252");
         convSuccess = true;
     }
     catch (const Exception &e) {

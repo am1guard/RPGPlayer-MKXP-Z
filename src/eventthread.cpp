@@ -20,6 +20,8 @@
  */
 
 #include "eventthread.h"
+#include "input/injecteddirectionlatch.h"
+#include "input/injectedkeypulse.h"
 
 #include <SDL_events.h>
 #include <SDL_messagebox.h>
@@ -32,6 +34,7 @@
 #include <alc.h>
 #include <alext.h>
 #include <cmath>
+#include <mutex>
 
 #include "sharedstate.h"
 #include "graphics.h"
@@ -955,6 +958,19 @@ void SyncPoint::Util::waitForUnlock()
 // Bu fonksiyon, library icindeki DOGRU keyStates adresini dondurur.
 // App tarafinin mkxpz_engine_inject_key() fonksiyonu bu adresi kullanmalidir.
 // =============================================================================
+namespace
+{
+std::mutex injectedKeyPulseMutex;
+InjectedKeyPulseSlot injectedKeyPulseSlots[SDL_NUM_SCANCODES];
+InjectedDirectionLatch injectedDirectionLatch;
+uint32_t injectedDirectionSampleGenerations[4] = {0, 0, 0, 0};
+
+static bool isInjectedDirectionScancode(int scancode)
+{
+    return scancode >= SDL_SCANCODE_RIGHT && scancode <= SDL_SCANCODE_UP;
+}
+}
+
 extern "C" {
     uint8_t* mkxpz_get_library_keyStates_ptr(void) {
         return EventThread::keyStates;
@@ -962,5 +978,59 @@ extern "C" {
     
     size_t mkxpz_get_keyStates_size(void) {
         return SDL_NUM_SCANCODES;
+    }
+
+    void mkxpz_set_library_injected_key_state(int scancode, int pressed) {
+        if (scancode < 0 || scancode >= SDL_NUM_SCANCODES)
+            return;
+
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        uint8_t &state = EventThread::keyStates[scancode];
+
+        if (!isInjectedDirectionScancode(scancode)) {
+            state = pressed ? 1 : 0;
+            return;
+        }
+
+        if (pressed)
+            injectedKeyPulseSlots[scancode].press(state);
+        else
+            injectedKeyPulseSlots[scancode].release(state);
+
+        injectedDirectionLatch.set(scancode, pressed != 0);
+    }
+
+    int mkxpz_consume_library_injected_dir4(void) {
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        return injectedDirectionLatch.consumeDir4();
+    }
+
+    void mkxpz_reset_library_injected_key_state(void) {
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        memset(&EventThread::keyStates, 0, sizeof(EventThread::keyStates));
+        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode)
+            injectedKeyPulseSlots[scancode] = InjectedKeyPulseSlot();
+        memset(injectedDirectionSampleGenerations, 0,
+               sizeof(injectedDirectionSampleGenerations));
+        injectedDirectionLatch.reset();
+    }
+
+    void mkxpz_begin_library_input_sample(void) {
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode) {
+            const int index = scancode - SDL_SCANCODE_RIGHT;
+            injectedDirectionSampleGenerations[index] =
+                injectedKeyPulseSlots[scancode].beginSample();
+        }
+    }
+
+    void mkxpz_finish_library_input_sample(void) {
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode) {
+            const int index = scancode - SDL_SCANCODE_RIGHT;
+            injectedKeyPulseSlots[scancode].finishSample(
+                injectedDirectionSampleGenerations[index],
+                EventThread::keyStates[scancode]);
+        }
     }
 }

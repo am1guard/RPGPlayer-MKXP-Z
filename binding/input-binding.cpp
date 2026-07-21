@@ -31,6 +31,8 @@
 #include "sharedstate.h"
 #include "src/util/util.h"
 
+extern "C" int mkxpz_consume_library_injected_dir4(void);
+
 RB_METHOD(inputDelta) {
     RB_UNUSED_PARAM;
     
@@ -309,6 +311,12 @@ RB_METHOD(inputLiveKeyStates) {
         rb_ary_push(ret, rb_bool_new(EventThread::keyStates[i]));
     
     return ret;
+}
+
+RB_METHOD(inputInjectedDir4) {
+    RB_UNUSED_PARAM;
+
+    return rb_fix_new(mkxpz_consume_library_injected_dir4());
 }
 
 RB_METHOD(inputRawKeyStates) {
@@ -624,6 +632,7 @@ void inputBindingInit() {
     
     _rb_define_module_function(module, "raw_key_states", inputRawKeyStates);
     _rb_define_module_function(module, "live_key_states", inputLiveKeyStates);
+    _rb_define_module_function(module, "injected_dir4", inputInjectedDir4);
     
     VALUE submod = rb_define_module_under(module, "Controller");
     _rb_define_module_function(submod, "connected?", inputControllerConnected);

@@ -46,7 +46,44 @@ static std::string getCharset(std::string &str, const char *emptyCharsetFallback
     return ret;
 }
 
-static std::string convertString(std::string &str, const char *emptyCharsetFallback = "UTF-8") {
+enum class ConversionStatus {
+    Success,
+    UnsupportedCharset,
+    InvalidSequence
+};
+
+static ConversionStatus convertFromCharset(const std::string &str,
+                                            const char *charset,
+                                            std::string &converted,
+                                            int &conversionErrno) {
+    iconv_t cd = iconv_open("UTF-8", charset);
+    if (cd == (iconv_t)-1) {
+        conversionErrno = errno;
+        return ConversionStatus::UnsupportedCharset;
+    }
+
+    size_t inLen = str.size();
+    size_t outLen = inLen * 4 + 1;
+    std::string buf(outLen, '\0');
+    char *inPtr = const_cast<char*>(str.c_str());
+    char *outPtr = &buf[0];
+
+    errno = 0;
+    size_t result = iconv(cd, &inPtr, &inLen, &outPtr, &outLen);
+    conversionErrno = errno;
+    iconv_close(cd);
+
+    if (result == (size_t)-1 || conversionErrno != 0)
+        return ConversionStatus::InvalidSequence;
+
+    buf.resize(buf.size() - outLen);
+    converted.swap(buf);
+    return ConversionStatus::Success;
+}
+
+static std::string convertString(std::string &str,
+                                 const char *emptyCharsetFallback = "UTF-8",
+                                 const char *conversionFailureFallback = nullptr) {
 
     std::string charset = getCharset(str, emptyCharsetFallback);
 
@@ -55,44 +92,52 @@ static std::string convertString(std::string &str, const char *emptyCharsetFallb
         return std::string(str);
     }
 
-    iconv_t cd = iconv_open("UTF-8", charset.c_str());
-    if (cd == (iconv_t)-1) {
-        // iconv_open failed (unsupported charset). Fall back to the raw input
-        // so callers (notably config.cpp readConfFile) keep working instead of
-        // dropping the whole file. Returning a possibly-non-UTF-8 string is
-        // acceptable here: json5pp will surface a normal parse error if the
-        // content is truly garbled. This was a contributing factor to the
-        // silent loss of `preloadScript` for Pokemon Anil/Indigo mkxp.json.
-        fprintf(stderr, "[MKXP-Z Encoding] iconv_open FAILED for charset '%s' - falling back to raw UTF-8\n",
-                charset.c_str());
-        return std::string(str);
+    std::string converted;
+    int iconv_errno = 0;
+    ConversionStatus status = convertFromCharset(str, charset.c_str(), converted, iconv_errno);
+    if (status == ConversionStatus::Success)
+        return converted;
+
+    const char *failureKind = status == ConversionStatus::UnsupportedCharset
+        ? "iconv_open FAILED"
+        : "iconv FAILED";
+    fprintf(stderr, "[MKXP-Z Encoding] %s for charset '%s' (errno: %d)\n",
+            failureKind, charset.c_str(), iconv_errno);
+
+    // Some short, mostly-ASCII Windows RPG Maker INI titles are assigned an
+    // unsupported legacy label by uchardet. General config/JSON callers still
+    // need the historical raw-byte fallback, but a caller that knows its own
+    // file contract may provide one explicit second-choice code page. This is
+    // attempted only after the detected charset actually fails.
+    if (conversionFailureFallback && conversionFailureFallback[0] != '\0' &&
+        strcmp(conversionFailureFallback, charset.c_str())) {
+        // A detector can also mislabel a short but already-valid UTF-8 title.
+        // Raw valid UTF-8 has priority over the legacy fallback; otherwise a
+        // title such as "Pokémon" would be double-decoded as CP1252.
+        std::string validatedUtf8;
+        int utf8Errno = 0;
+        if (convertFromCharset(str, "UTF-8", validatedUtf8, utf8Errno) ==
+            ConversionStatus::Success) {
+            fprintf(stderr, "[MKXP-Z Encoding] raw input is valid UTF-8; ignoring legacy fallback\n");
+            return std::string(str);
+        }
+
+        std::string fallbackConverted;
+        int fallbackErrno = 0;
+        ConversionStatus fallbackStatus = convertFromCharset(
+            str, conversionFailureFallback, fallbackConverted, fallbackErrno);
+        if (fallbackStatus == ConversionStatus::Success) {
+            fprintf(stderr, "[MKXP-Z Encoding] using '%s' conversion-failure fallback\n",
+                    conversionFailureFallback);
+            return fallbackConverted;
+        }
+        fprintf(stderr, "[MKXP-Z Encoding] fallback charset '%s' failed (errno: %d)\n",
+                conversionFailureFallback, fallbackErrno);
     }
 
-    size_t inLen = str.size();
-    size_t outLen = inLen * 4;
-    std::string buf(outLen, '\0');
-    char *inPtr = const_cast<char*>(str.c_str());
-    char *outPtr = const_cast<char*>(buf.c_str());
-
-    errno = 0;
-    size_t result = iconv(cd, &inPtr, &inLen, &outPtr, &outLen);
-    int iconv_errno = errno;
-
-    iconv_close(cd);
-
-    if (result != (size_t)-1 && iconv_errno == 0)
-    {
-        buf.resize(buf.size()-outLen);
-        return buf;
-    }
-
-    // iconv conversion failed. Rather than throwing (which causes
-    // `Encoding::convertString` callers like config.cpp to drop the entire
-    // file and silently disable preloadScript / Correction.rb), fall back
-    // to returning the raw input string. The downstream parser will surface
-    // a meaningful error if the content is actually invalid UTF-8.
-    fprintf(stderr, "[MKXP-Z Encoding] iconv FAILED - charset: '%s', errno: %d, falling back to raw UTF-8\n",
-            charset.c_str(), iconv_errno);
+    // Preserve the existing general fallback: config/JSON parsing must not be
+    // dropped merely because the detector returned an unavailable label.
+    fprintf(stderr, "[MKXP-Z Encoding] falling back to raw input bytes\n");
     return std::string(str);
 }
 }
