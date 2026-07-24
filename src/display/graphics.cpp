@@ -892,33 +892,62 @@ struct GraphicsPrivate {
         rtData->screenOffset = scOffset / backingScaleFactor;
     }
     
-    /* Enforces fixed aspect ratio, if desired */
+    /* Enforces fixed aspect ratio, if desired.
+     *
+     * RPGPlayer ekran olcekleme (Sigdir/Dengeli/Uzat): aspect-fit ile tam-ekran
+     * arasinda `config.screenStretch` (t, 0..1) katsayisiyla dogrusal
+     * interpolasyon yapilir:
+     *
+     *     out = fit + (win - fit) * t
+     *
+     * t = 0 -> klasik aspect-fit (bu ozellik oncesi davranisla BIT-BIREBIR ayni)
+     * t = 1 -> pencereyi tam doldur (fixedAspectRatio=false ile ayni sonuc)
+     * 0 <= t <= 1 oldugu icin out <= win, yani scOffset >= 0: KIRPMA IMKANSIZ.
+     *
+     * Ayni formul Ren'Py (config.adjust_view_size) ve MV/MZ
+     * (Graphics._realScaleX/Y) tarafinda da uygulanir; uc katman arasindaki
+     * surukleme .agent/test_scripts/test_screen_scale_modes.* ile korunur.
+     *
+     * Touch eslemesi updateScreenResoRatio() icinde scSize/scOffset'ten
+     * turedigi icin yeni geometriyle kendiliginden dogru kalir; SDL penceresi
+     * ve drawable boyutu DEGISMEZ, yalniz GL viewport hesabi degisir. */
     void recalculateScreenSize(bool fixedAspectRatio) {
         scSize = winSize;
-        
-        if (!fixedAspectRatio) {
+
+        const double stretch = clamp(threadData->config.screenStretch, 0.0, 1.0);
+
+        if (!fixedAspectRatio || stretch >= 1.0) {
             if (!integerScaleActive || (integerScaleActive && integerLastMileScaling)) {
                 scOffset = Vec2i(0, 0);
                 return;
             }
         }
-        
-        if (integerScaleActive && !integerLastMileScaling && integerScaleStepApplicable()) {
+
+        /* Pixel-perfect (integer blok) yolu yalniz t == 0'da gecerlidir.
+         * Kullanici acikca bir olcekleme modu sectiyse (t > 0) bu talep
+         * pixel-perfect tercihini EZER; aksi halde ayar sessizce yok sayilirdi. */
+        if (stretch <= 0.0 && integerScaleActive && !integerLastMileScaling &&
+            integerScaleStepApplicable()) {
             scOffset.x = ((winSize.x / 2) - (scRes.x / 2) * integerScaleFactor.x);
             scOffset.y = ((winSize.y / 2) - (scRes.y / 2) * integerScaleFactor.y);
-            
+
             scSize = Vec2i(scRes.x * integerScaleFactor.x, scRes.y * integerScaleFactor.y);
             return;
         }
-        
+
         float resRatio = (float)scRes.x / scRes.y;
         float winRatio = (float)winSize.x / winSize.y;
-        
+
         if (resRatio > winRatio)
             scSize.y = scSize.x / resRatio;
         else if (resRatio < winRatio)
             scSize.x = scSize.y * resRatio;
-        
+
+        if (stretch > 0.0) {
+            scSize.x = (int)(scSize.x + (winSize.x - scSize.x) * stretch);
+            scSize.y = (int)(scSize.y + (winSize.y - scSize.y) * stretch);
+        }
+
         scOffset.x = (winSize.x - scSize.x) / 2.f;
         scOffset.y = (winSize.y - scSize.y) / 2.f;
     }

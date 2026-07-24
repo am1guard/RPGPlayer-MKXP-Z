@@ -43,6 +43,14 @@ struct Config {
     bool winResizable;
     bool fullscreen;
     bool fixedAspectRatio;
+    /* RPGPlayer ekran olcekleme lerp katsayisi (0..1):
+     *   0 = aspect-fit (fixedAspectRatio'nun klasik davranisi, varsayilan)
+     *   1 = pencereyi tam doldur (oran bozulur)
+     * Ara degerler fit ile tam-ekran arasinda dogrusal interpolasyondur.
+     * 0..1 araliginda kaldigi icin ciktinin pencereyi asmasi (kirpma) imkansizdir.
+     * Bkz. graphics.cpp recalculateScreenSize + Rpgplayer/Models/AppSettings.swift
+     * ScreenScaleMode.stretchFactor (ayni formul Ren'Py ve MV/MZ'de de kullanilir). */
+    double screenStretch;
     int smoothScaling;
     int smoothScalingDown;
     int bitmapSmoothScaling;

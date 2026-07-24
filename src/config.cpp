@@ -147,6 +147,7 @@ void Config::read(int argc, char *argv[]) {
         {"winResizable", true},
         {"fullscreen", false},
         {"fixedAspectRatio", true},
+        {"screenStretch", 0.},
         {"smoothScaling", 0},
         {"smoothScalingDown", 0},
         {"bitmapSmoothScaling", 0},
@@ -290,6 +291,7 @@ try { exp } catch (...) {}
     SET_OPT(printFPS, boolean);
     SET_OPT(fullscreen, boolean);
     SET_OPT(fixedAspectRatio, boolean);
+    SET_OPT(screenStretch, number);
     SET_OPT(smoothScaling, integer);
     SET_OPT(smoothScalingDown, integer);
     SET_OPT(bitmapSmoothScaling, integer);
