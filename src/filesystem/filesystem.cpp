@@ -887,10 +887,33 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
        
        if (p->fileLists.contains(dirStr)) {
            const std::vector<std::string> &list = p->fileLists[dirStr];
-           fprintf(stderr, "[MKXP-Z] Contents of directory '%s' (%zu files):\n", dir, list.size());
-           for (const std::string &file : list) {
-               std::string fullPath = dirStr.empty() ? file : (dirStr + "/" + file);
-               std::string realName = file;
+           /* Eksik dosya basina TUM dizini stderr'e dokmek uretimde kabul
+            * edilemez bir maliyettir. Pokemon Rejuvenation'in
+            * 'graphics/characters' dizini 20412 girdi tasir; tek bir eksik
+            * 'Graphics/Characters/trfront' istegi 20412 fprintf + 40824 hash
+            * aramasi uretiyordu. Kullanicinin bir gunluk log'unda bu blok
+            * 204 bin satir / ~7 MB yazdi ve stderr LogManager tarafindan
+            * dosyaya yonlendirildigi icin is ANA THREAD'i bloklar (oyun o
+            * sirada donar). Teshis degeri korunuyor: hangi dizin, kac dosya
+            * ve istekle ayni on-eki paylasan adaylar hala yazilir; yalniz
+            * alakasiz girdiler ve kMaxListed ustu kuyruk bastirilir. */
+           static const size_t kMaxListed = 25;
+           /* 'file' aramada kullanilan kucuk harfli istek adidir; asagidaki
+            * dongude ayni adi tasiyan bir degisken onu golgeledigi icin
+            * on-ek DONGUDEN ONCE kopyalanir. */
+           const std::string requestedPrefix = std::string(file).substr(0, 2);
+           size_t listed = 0, similar = 0;
+           fprintf(stderr, "[MKXP-Z] Contents of directory '%s' (%zu files), entries similar to '%s':\n",
+                   dir, list.size(), file);
+           for (const std::string &entry : list) {
+               if (!requestedPrefix.empty() &&
+                   entry.compare(0, requestedPrefix.size(), requestedPrefix) != 0)
+                   continue;
+               ++similar;
+               if (listed >= kMaxListed)
+                   continue;
+               std::string fullPath = dirStr.empty() ? entry : (dirStr + "/" + entry);
+               std::string realName = entry;
                // Try to retrieve mixed case name from pathCache
                if (p->pathCache.contains(fullPath)) {
                    std::string mixed = p->pathCache[fullPath];
@@ -903,7 +926,13 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
                    }
                }
                fprintf(stderr, "  - '%s'\n", realName.c_str());
+               ++listed;
            }
+           if (similar > listed)
+               fprintf(stderr, "[MKXP-Z]   ... %zu more similar entries suppressed\n",
+                       similar - listed);
+           else if (similar == 0)
+               fprintf(stderr, "[MKXP-Z]   (no entry shares the requested prefix)\n");
        } else {
            fprintf(stderr, "[MKXP-Z] Directory '%s' not found in cache.\n", dir);
        }

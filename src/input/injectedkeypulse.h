@@ -47,6 +47,13 @@ struct InjectedKeyPulseSlot
         return generation_;
     }
 
+    /* Salt-okunur durum erisimcileri. Davranisi DEGISTIRMEZLER; sozlesme
+     * testinin (.agent/test_scripts/test_injected_key_pulse_contract.cpp)
+     * ic gecisleri dogrulayabilmesi icin varlar. */
+    uint32_t generation() const { return generation_; }
+    uint32_t sampledGeneration() const { return sampledGeneration_; }
+    bool hasPendingRelease() const { return pendingReleaseGeneration_ != 0; }
+
     void finishSample(uint32_t sampledGeneration, uint8_t &state)
     {
         if (sampledGeneration == 0 || sampledGeneration != generation_)
