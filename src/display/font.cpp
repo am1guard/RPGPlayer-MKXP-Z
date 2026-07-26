@@ -209,6 +209,43 @@ void SharedFontState::initFontSetCB(SDL_RWops &ops,
 		set.regular = filename;
 	else if (style != "Regular" && set.other.empty())
 		set.other = filename;
+
+	/* Also index the face under "<family> <style>" -- the font's FULL name.
+	 *
+	 * FreeType reports the TYPOGRAPHIC family (name ID 16) when a font has
+	 * one, so a weighted face registers only under its base family: the file
+	 * "SYS-DEFAULT-NotoSansCJKtc-Black.otf" lands on "noto sans cjk tc" and
+	 * the weight lives in the style name. Games, however, commonly ask for
+	 * the FULL name (name ID 4). LonaRPG does exactly that -- its
+	 * Data/Scripts/41_TTF_loader_FontUtils.rb reads name ID 4 out of every
+	 * file in Fonts/ and hands the result to Font.default_name, so it
+	 * requested "Noto Sans CJK TC Black" while the only key we had was
+	 * "noto sans cjk tc". getFont() below then finds an empty FontSet, sets
+	 * family = "" and silently falls back to the bundled font -- which has
+	 * no U+24B6..U+24CE circled letters, so the tutorial's on-screen key
+	 * prompts rendered as tofu boxes.
+	 *
+	 * Registering the combined name restores the full name for every shipped
+	 * face (verified against this game's Fonts/: "Noto Sans CJK TC" + "Black",
+	 * "Source Han Sans" + "Bold", "Noto Sans LRPG" + "Black" all reconstruct
+	 * their name ID 4 exactly). Purely additive: the primary family key above
+	 * is untouched and an alias never overwrites an entry that already exists,
+	 * so a font whose real family collides with another's full name keeps
+	 * first-registration-wins semantics. */
+	if (!style.empty())
+	{
+		std::string fullName = family + " " + style;
+		std::transform(fullName.begin(), fullName.end(), fullName.begin(),
+			[](unsigned char c){ return std::tolower(c); });
+
+		if (fullName != family)
+		{
+			FontSet &fullSet = p->sets[fullName];
+
+			if (fullSet.regular.empty() && fullSet.other.empty())
+				fullSet.regular = filename;
+		}
+	}
 }
 
 // https://github.com/wine-mirror/wine/blob/dc34fef45d491516fa8eaee45b2ae40faa7b0bfe/dlls/win32u/freetype.c
