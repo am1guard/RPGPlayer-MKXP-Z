@@ -1424,6 +1424,22 @@ static void mriBindingInit() {
     // Many older RPG Maker scripts (like ISPDS) have bugs where they compare nil with numbers.
     // E.g. "if variable < 0.0" where variable is nil crashes with ArgumentError.
     // This patch makes nil comparable with numbers, treating nil as 0, preventing crashes.
+    //
+    // EQUALITY MUST BE RESTORED (2026-07-26). `include Comparable` also brings
+    // Comparable#==, which is defined as `(self <=> other) == 0`. Combined with
+    // the <=> below that treats nil as 0, `nil == 0` evaluated to TRUE for every
+    // game -- a core Ruby semantics violation (`nil == 0` is false, and
+    // `0 == nil` is too, because Integer#== falls back to `nil == 0`). Any script
+    // branching on `something == 0` took the wrong branch whenever the value was
+    // nil. Device-confirmed fallout in LonaRPG: Game_Event#check_event_trigger_region
+    // (39_Game_Event.rb:1639) does `start if @region_trigger == region_id(px,py)`;
+    // @region_trigger defaults to nil and an unpainted region is 0, so EVERY
+    // Player-Touch/Event-Touch event fired on every frame the interpreter was
+    // idle -- the tutorial jumped from one step to the next without the player
+    // ever walking there, and replayed after it ended.
+    // Defining == directly on NilClass wins over Comparable#== (NilClass precedes
+    // Comparable in the ancestor chain), so the ordering tolerance this block was
+    // written for (<, <=, >, >=, between?, clamp) is preserved untouched.
     // =============================================================================
     rb_eval_string_protect(
         "class NilClass\n"
@@ -1431,6 +1447,9 @@ static void mriBindingInit() {
         "  def <=>(other)\n"
         "    return 0 <=> other if other.is_a?(Numeric)\n"
         "    nil\n"
+        "  end\n"
+        "  def ==(other)\n"
+        "    other.nil?\n"
         "  end\n"
         "  # Add safe property accessors for uninitialized sprites/objects\n"
         "  def x; 0; end\n"

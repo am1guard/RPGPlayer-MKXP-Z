@@ -32,6 +32,29 @@
 #include "src/util/util.h"
 
 extern "C" int mkxpz_consume_library_injected_dir4(void);
+extern "C" void mkxpz_begin_library_input_sample(void);
+extern "C" void mkxpz_finish_library_input_sample(void);
+
+/* A direct read of EventThread::keyStates IS a real input sample.
+ *
+ * The virtual-direction pulse policy (src/input/injectedkeypulse.h) keeps a
+ * tap that began and ended between two samples visible for exactly the next
+ * one, then clears it. Until now only Input::update() opened a sample, so a
+ * game that REPLACES Ruby's Input.update outright never closed the pulse and
+ * the direction stayed latched at 1 forever - the on-screen joystick behaved
+ * like a key welded down (LonaRPG's Hime AllKey input system: plain
+ * `def self.update` with no alias/super, reading the keys through its
+ * GetKeyboardState Win32API mock, which lands on Input.live_key_states).
+ *
+ * Wrapping the raw reads closes the pulse at the point the game actually
+ * consumes it, which is what the policy always meant by "the next real input
+ * sample". Held keys are untouched: finishSample only clears a slot whose
+ * release is still pending. */
+struct InjectedKeySampleScope
+{
+    InjectedKeySampleScope() { mkxpz_begin_library_input_sample(); }
+    ~InjectedKeySampleScope() { mkxpz_finish_library_input_sample(); }
+};
 
 RB_METHOD(inputDelta) {
     RB_UNUSED_PARAM;
@@ -304,12 +327,14 @@ RB_METHOD(inputMouseInWindow) {
 
 RB_METHOD(inputLiveKeyStates) {
     RB_UNUSED_PARAM;
-    
+
+    InjectedKeySampleScope injectedKeySampleScope;
+
     VALUE ret = rb_ary_new();
-    
+
     for (int i = 0; i < SDL_NUM_SCANCODES; i++)
         rb_ary_push(ret, rb_bool_new(EventThread::keyStates[i]));
-    
+
     return ret;
 }
 
@@ -335,12 +360,14 @@ RB_METHOD(inputRawKeyStates) {
     // Boylece Input.update() cagirilmasa bile anlik key state'ler doner.
     // ==========================================================================
     
+    InjectedKeySampleScope injectedKeySampleScope;
+
     VALUE ret = rb_ary_new();
-    
+
     // Dogrudan EventThread::keyStates'i oku (Input.update gerekmez)
     for (int i = 0; i < SDL_NUM_SCANCODES; i++)
         rb_ary_push(ret, rb_bool_new(EventThread::keyStates[i]));
-    
+
     return ret;
 }
 
