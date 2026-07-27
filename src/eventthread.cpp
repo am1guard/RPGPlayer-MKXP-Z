@@ -35,6 +35,7 @@
 #include <alext.h>
 #include <cmath>
 #include <mutex>
+#include <cstdio>   // EXTRALOG-INPUT3 fprintf
 
 #include "sharedstate.h"
 #include "graphics.h"
@@ -963,12 +964,135 @@ namespace
 std::mutex injectedKeyPulseMutex;
 InjectedKeyPulseSlot injectedKeyPulseSlots[SDL_NUM_SCANCODES];
 InjectedDirectionLatch injectedDirectionLatch;
-uint32_t injectedDirectionSampleGenerations[4] = {0, 0, 0, 0};
+
+/* Darbe politikasi TUM scancode'lar icin gecerlidir, yalniz yon tuslari icin
+ * degil. Enjekte edilen her tus (ekran klavyesi, ozel dugmeler ve Mac'te
+ * FIZIKSEL klavye -- hepsi PhysicalGamepadManager.handlePhysicalKey uzerinden
+ * DispatchQueue.main.async ile ERTELENIP mkxpz_set_library_injected_key_state'e
+ * iner) iki ornekleme arasinda basilip birakilirsa tamamen kaybolurdu. Yon
+ * disi tuslar eskiden `state = pressed ? 1 : 0` daliyla islendigi icin W/A/S/D,
+ * Q, Z, X gibi tuslarda hizli basislar "bazen tutuyor bazen tutmuyor" diye
+ * gorunuyordu (LonaRPG beceri tuslari). */
+uint32_t injectedKeySampleGenerations[SDL_NUM_SCANCODES] = {0};
 
 static bool isInjectedDirectionScancode(int scancode)
 {
     return scancode >= SDL_SCANCODE_RIGHT && scancode <= SDL_SCANCODE_UP;
 }
+
+/* EXTRALOG-INPUT3 --- GECICI TESHIS KATMANI (kok neden kapaninca kaldirilacak)
+ *
+ * Iki tur once kaldirilmisti ve ERKEN kaldirilmis: kullanici "cok azaldi ama
+ * devam ediyor" dedi ve elde basis verisi kalmadigi icin kalan kaybin yeri
+ * log'dan okunamadi. Bu tur olculecek sey NET: iki hizli dokunusun BIRLESMESI.
+ *
+ * Satir bicimi:
+ *   [MKXP-Z INPUT-TRACE] sc=20 src=inj seen=3 held=28ms gap=140ms merged=0 end=cluster
+ *
+ *   seen   : bayt 1 iken oyunun kac GOZLEM okumasi yapabildigi
+ *            0    -> oyun basisi HIC goremedi (kayip motorda)
+ *            >=1  -> motor teslim etti
+ *   held   : basistan baytin dusmesine kadar gecen sure
+ *   gap    : onceki dokunusun baytinin dusmesinden bu basisa kadar gecen sure
+ *            (kullanicinin dokunma kadansi -- birlesme riski bununla olculur)
+ *   merged : 1 ise basis, onceki dokunusun bayti HALA 1 iken geldi. O durumda
+ *            oyun 1->0->1 gecisi GORMEZ ve bu basis kenar uretemez -- yani
+ *            KAYIP. Bu alan kalan hatanin dogrudan sayacidir.
+ *   end    : baytu ne dusurdu (cluster = ayni karenin okumalari bitti,
+ *            cap = mutlak tavan, sample = yetkili ornekleme)
+ *
+ * Yon tuslari (79-82) HARIC: basili tutulurlar, satiri bogarlar, sorunlu degil. */
+struct InputTraceSlot
+{
+    uint32_t pressMs;
+    uint32_t lastClearMs;
+    uint32_t observed;
+    bool active;
+    char src;
+};
+InputTraceSlot inputTrace[SDL_NUM_SCANCODES] = {};
+uint32_t inputTraceLines = 0;
+uint32_t inputTraceMerged = 0;
+bool inputTraceStampPrinted = false;
+
+/* Hangi kutuphanenin cihazda oldugunu KANITLAR. Statik baglandigi icin eski bir
+ * .a ile hicbir belirti degismez ve olcum sessizce bosa gider. */
+static void inputTracePrintBuildStamp()
+{
+    if (inputTraceStampPrinted)
+        return;
+    inputTraceStampPrinted = true;
+    fprintf(stderr, "[MKXP-Z INPUT-BUILD] %s (cluster=%ums cap=%ums)\n",
+            "2026-07-27-cluster1",
+            (unsigned)InjectedKeyPulseSlot::kFrameClusterMs,
+            (unsigned)InjectedKeyPulseSlot::kObservationalHoldMs);
+    fflush(stderr);
+}
+
+static void inputTraceEmit(int scancode, const InputTraceSlot &t, uint32_t nowMs,
+                           int merged, const char *endedBy)
+{
+    if (inputTraceLines >= 400)
+        return;
+    ++inputTraceLines;
+    const uint32_t gap = t.lastClearMs ? (uint32_t)(t.pressMs - t.lastClearMs) : 0;
+    fprintf(stderr,
+            "[MKXP-Z INPUT-TRACE] sc=%d src=%s seen=%u held=%ums gap=%ums "
+            "merged=%d end=%s\n",
+            scancode, t.src == 's' ? "sdl" : "inj", t.observed,
+            (unsigned)(nowMs - t.pressMs), gap, merged, endedBy);
+    fflush(stderr);
+}
+
+static void inputTraceNotePress(int scancode, uint8_t previousState, char src,
+                                uint32_t nowMs)
+{
+    if (isInjectedDirectionScancode(scancode))
+        return;
+
+    InputTraceSlot &t = inputTrace[scancode];
+
+    /* previousState != 0: onceki dokunusun bayti HENUZ dusmemis. Oyun bu basisi
+     * ayri bir kenar olarak GOREMEZ -> dogrudan kayip. Hemen yazilir, cunku bu
+     * basisin kendi 1->0 gecisi olmayacak. */
+    if (previousState)
+    {
+        ++inputTraceMerged;
+        t.pressMs = nowMs;
+        t.src = src;
+        t.observed = 0;
+        inputTraceEmit(scancode, t, nowMs, 1, "merged");
+        return;
+    }
+
+    t.pressMs = nowMs;
+    t.observed = 0;
+    t.active = true;
+    t.src = src;
+}
+
+/* Bayt 1 iken her cagri bir GOZLEM sayilir; 1 -> 0 gecisinde satir yazilir.
+ * injectedKeyPulseMutex TUTULARAK cagrilir. */
+static void inputTraceNoteRead(int scancode, uint8_t before, uint8_t after,
+                               uint32_t nowMs, const char *endedBy)
+{
+    InputTraceSlot &t = inputTrace[scancode];
+    if (!t.active)
+        return;
+
+    if (after)
+    {
+        ++t.observed;
+        return;
+    }
+    if (!before)
+        return;
+
+    t.active = false;
+    inputTraceEmit(scancode, t, nowMs, 0, endedBy);
+    t.lastClearMs = nowMs ? nowMs : 1;
+}
+
 }
 
 extern "C" {
@@ -987,17 +1111,61 @@ extern "C" {
         std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
         uint8_t &state = EventThread::keyStates[scancode];
 
-        if (!isInjectedDirectionScancode(scancode)) {
-            state = pressed ? 1 : 0;
-            return;
+        const uint32_t nowMs = SDL_GetTicks();
+        if (pressed) {
+            inputTraceNotePress(scancode, state, 'i', nowMs); // EXTRALOG-INPUT3
+            injectedKeyPulseSlots[scancode].press(state);
+        } else {
+            injectedKeyPulseSlots[scancode].release(state, nowMs);
         }
 
-        if (pressed)
-            injectedKeyPulseSlots[scancode].press(state);
-        else
-            injectedKeyPulseSlots[scancode].release(state);
+        /* Latch YALNIZ yon tuslari icindir (Input.injected_dir4). */
+        if (isInjectedDirectionScancode(scancode))
+            injectedDirectionLatch.set(scancode, pressed != 0);
+    }
 
-        injectedDirectionLatch.set(scancode, pressed != 0);
+    /* GERCEK (sentetik olmayan) SDL tus olayi -- fiziksel klavye yolu.
+     *
+     * NEDEN GEREKLI: SDL, `SDL_InitGCKeyboard()` icinde
+     * `GCKeyboard.coalescedKeyboard`in TEK `keyChangedHandler` slotunu ele
+     * gecirir (deps/SDL `src/video/uikit/SDL_uikitvideo.m:164` -> video init,
+     * yani OYUN MOTORU ACILIRKEN; app kendi handler'ini uygulama acilisinda
+     * kurdugu icin SDL SONRA yazar ve KAZANIR). O andan itibaren fiziksel
+     * klavye `mkxpz_set_library_injected_key_state` yoluna HIC ugramaz: tuslar
+     * SDL olay kuyrugundan gelir ve eskiden `EventThread::keyStates` dizisine
+     * DOGRUDAN yazilirdi (mkxpz_ios_api.mm olay pompasi). Tek bir
+     * `while (SDL_PollEvent(...))` turunda hem KEYDOWN hem KEYUP bosaltilirsa
+     * bayt 0'da kalir ve basis oyuna HIC gorunmez.
+     *
+     * Bu, "yurume calisiyor ama beceri tuslari bazen tutmuyor" belirtisinin
+     * tam aciklamasidir: yurume tusu BASILI TUTULUR (bayt kareler boyunca 1'de
+     * kalir), beceri tusu HIZLI BIR DOKUNUSTUR (down+up ayni turda bosalir).
+     *
+     * Cozum: gercek tus olaylari da enjeksiyonla AYNI darbe politikasindan
+     * gecer. Yon LATCH'i BILEREK beslenmez -- `Input.injected_dir4` sanal
+     * kontrole ozgudur ve yalniz iki eski oyunun Correction.rb yamasinda
+     * tuketilir; gercek klavyeden beslemek o oyunlarin davranisini degistirirdi.
+     */
+    void mkxpz_set_library_sdl_key_state(int scancode, int pressed, int isRepeat) {
+        if (scancode < 0 || scancode >= SDL_NUM_SCANCODES)
+            return;
+
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        uint8_t &state = EventThread::keyStates[scancode];
+
+        /* SDL tekrar olayi yeni bilgi tasimaz. Tus zaten basiliyken press()
+         * cagirmak darbe slotunun nesil sayacini dondurur ve birakmayi bir
+         * ornekleme geciktirirdi. */
+        if (pressed && isRepeat && state)
+            return;
+
+        const uint32_t nowMs = SDL_GetTicks();
+        if (pressed) {
+            inputTraceNotePress(scancode, state, 's', nowMs); // EXTRALOG-INPUT3
+            injectedKeyPulseSlots[scancode].press(state);
+        } else {
+            injectedKeyPulseSlots[scancode].release(state, nowMs);
+        }
     }
 
     int mkxpz_consume_library_injected_dir4(void) {
@@ -1008,29 +1176,55 @@ extern "C" {
     void mkxpz_reset_library_injected_key_state(void) {
         std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
         memset(&EventThread::keyStates, 0, sizeof(EventThread::keyStates));
-        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode)
+        /* TUM slotlar sifirlanir: oyun degistiginde yon disi bir tusta bekleyen
+         * birakma kalirsa, o tus yeni oyunda basili gorunurdu. */
+        for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode)
             injectedKeyPulseSlots[scancode] = InjectedKeyPulseSlot();
-        memset(injectedDirectionSampleGenerations, 0,
-               sizeof(injectedDirectionSampleGenerations));
+        memset(injectedKeySampleGenerations, 0,
+               sizeof(injectedKeySampleGenerations));
         injectedDirectionLatch.reset();
+        memset(inputTrace, 0, sizeof(inputTrace)); // EXTRALOG-INPUT3
+        inputTraceLines = 0;                       // EXTRALOG-INPUT3
+        inputTraceMerged = 0;                      // EXTRALOG-INPUT3
+        inputTracePrintBuildStamp();               // EXTRALOG-INPUT3
     }
 
     void mkxpz_begin_library_input_sample(void) {
         std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
-        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode) {
-            const int index = scancode - SDL_SCANCODE_RIGHT;
-            injectedDirectionSampleGenerations[index] =
+        for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode)
+            injectedKeySampleGenerations[scancode] =
                 injectedKeyPulseSlots[scancode].beginSample();
-        }
     }
 
     void mkxpz_finish_library_input_sample(void) {
         std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
-        for (int scancode = SDL_SCANCODE_RIGHT; scancode <= SDL_SCANCODE_UP; ++scancode) {
-            const int index = scancode - SDL_SCANCODE_RIGHT;
+        const uint32_t nowMs = SDL_GetTicks();                    // EXTRALOG-INPUT3
+        for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode) {
+            uint8_t &state = EventThread::keyStates[scancode];
+            const uint8_t before = state;                        // EXTRALOG-INPUT3
             injectedKeyPulseSlots[scancode].finishSample(
-                injectedDirectionSampleGenerations[index],
-                EventThread::keyStates[scancode]);
+                injectedKeySampleGenerations[scancode], state);
+            inputTraceNoteRead(scancode, before, state, nowMs, "sample"); // EXTRALOG-INPUT3
+        }
+    }
+
+    /* GOZLEM okumasi (`Input.raw_key_states` / `Input.live_key_states`).
+     *
+     * Ruby bu metotlari kare basina BIRDEN FAZLA kez cagirir. Eskiden her cagri
+     * yetkili bir ornekleme sayiliyordu, dolayisiyla ILK okuma darbeyi tuketiyor
+     * ve ayni karedeki sonraki okumalar 0 goruyordu -- dokunulan tuslar
+     * ("6-10 basista bir tutuyor") kayboluyordu. Artik okuma darbeyi TUKETMEZ;
+     * yalniz `kObservationalHoldMs` zaman butcesi asilmissa tutmayi bitirir, ki
+     * hicbir yetkili ornekleme kosmayan oyunlarda (Hime `Input.update`i ezer)
+     * tus 1'de kaynak yapmasin. Ayrintili gerekce: injectedkeypulse.h. */
+    void mkxpz_peek_library_input_state(void) {
+        std::lock_guard<std::mutex> lock(injectedKeyPulseMutex);
+        const uint32_t nowMs = SDL_GetTicks();
+        for (int scancode = 0; scancode < SDL_NUM_SCANCODES; ++scancode) {
+            uint8_t &state = EventThread::keyStates[scancode];
+            const uint8_t before = state;                        // EXTRALOG-INPUT3
+            injectedKeyPulseSlots[scancode].peek(state, nowMs);
+            inputTraceNoteRead(scancode, before, state, nowMs, "cluster"); // EXTRALOG-INPUT3
         }
     }
 }

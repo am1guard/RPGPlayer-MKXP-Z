@@ -32,29 +32,29 @@
 #include "src/util/util.h"
 
 extern "C" int mkxpz_consume_library_injected_dir4(void);
-extern "C" void mkxpz_begin_library_input_sample(void);
-extern "C" void mkxpz_finish_library_input_sample(void);
+extern "C" void mkxpz_peek_library_input_state(void);
 
-/* A direct read of EventThread::keyStates IS a real input sample.
+/* A direct read of EventThread::keyStates is an OBSERVATION, not a sample.
  *
- * The virtual-direction pulse policy (src/input/injectedkeypulse.h) keeps a
- * tap that began and ended between two samples visible for exactly the next
- * one, then clears it. Until now only Input::update() opened a sample, so a
- * game that REPLACES Ruby's Input.update outright never closed the pulse and
- * the direction stayed latched at 1 forever - the on-screen joystick behaved
- * like a key welded down (LonaRPG's Hime AllKey input system: plain
- * `def self.update` with no alias/super, reading the keys through its
- * GetKeyboardState Win32API mock, which lands on Input.live_key_states).
+ * Onceki surumde bu iki okuyucu (`raw_key_states` / `live_key_states`) tam bir
+ * ornekleme turu aciyordu. Gerekcesi gecerliydi: darbe politikasini yalniz
+ * `Input::update()` kapatiyordu ve Ruby'nin `Input.update`ini tumden EZEN bir
+ * oyunda (LonaRPG'nin Hime AllKey sistemi: alias/super'siz `def self.update`,
+ * tuslari GetKeyboardState Win32API mock'u -> `live_key_states` uzerinden okur)
+ * darbe hic kapanmiyor, tus 1'de kaynak yapiyordu.
  *
- * Wrapping the raw reads closes the pulse at the point the game actually
- * consumes it, which is what the policy always meant by "the next real input
- * sample". Held keys are untouched: finishSample only clears a slot whose
- * release is still pending. */
-struct InjectedKeySampleScope
-{
-    InjectedKeySampleScope() { mkxpz_begin_library_input_sample(); }
-    ~InjectedKeySampleScope() { mkxpz_finish_library_input_sample(); }
-};
+ * Ama bu, dokunulan tuslarda daha kotu bir hataya yol acti: Ruby bu metotlari
+ * kare basina BIRDEN FAZLA kez cagirir (oyunun kendi okumasi + Correction.rb'nin
+ * kare basina kosan kancalari), ve darbe TEK ornekleme dayandigi icin ILK okuma
+ * onu tuketiyordu. Dokunus ancak karenin dar bir penceresine denk gelirse sag
+ * kaliyordu -> "6-10 basista bir tutuyor". Basili tutulan tus etkilenmiyordu
+ * (bayt surekli 1), bu yuzden yurume saglam gorunurken beceri/Enter/Esc bozuktu.
+ *
+ * Cozum: okuma darbeyi TUKETMEZ (`peek`), boylece karedeki TUM okuyucular ayni
+ * dokunusu gorur. Kaynak yapma sorunu ise `kObservationalHoldMs` zaman
+ * butcesiyle onlenir -- tutma en fazla o kadar surer. Yetkili tuketici hala
+ * `Input::update()`tir (src/input/input.cpp). Ayrintili gerekce ve degerin
+ * secimi: src/input/injectedkeypulse.h dosya basi notu. */
 
 RB_METHOD(inputDelta) {
     RB_UNUSED_PARAM;
@@ -328,7 +328,7 @@ RB_METHOD(inputMouseInWindow) {
 RB_METHOD(inputLiveKeyStates) {
     RB_UNUSED_PARAM;
 
-    InjectedKeySampleScope injectedKeySampleScope;
+    mkxpz_peek_library_input_state();
 
     VALUE ret = rb_ary_new();
 
@@ -360,7 +360,7 @@ RB_METHOD(inputRawKeyStates) {
     // Boylece Input.update() cagirilmasa bile anlik key state'ler doner.
     // ==========================================================================
     
-    InjectedKeySampleScope injectedKeySampleScope;
+    mkxpz_peek_library_input_state();
 
     VALUE ret = rb_ary_new();
 

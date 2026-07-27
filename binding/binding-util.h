@@ -425,20 +425,27 @@ inline void rb_int_arg(VALUE arg, int *out, int argPos = 0) {
     }
 }
 
+/* RGSS BOOLEAN SEMANTICS: RGSSxxx.dll stores boolean properties through
+ * RTEST(), so every value except nil and false counts as true. mkxp-z used to
+ * accept ONLY true/false/nil here and raise "Argument %d: Expected bool" for
+ * anything else, which is stricter than the engine it emulates: a game that
+ * runs on Windows crashes here instead.
+ *
+ * Real case (LonaRPG B.0.10.7.5): Data/Scripts/Frames/200_Galv_Event_Popup.rb
+ * line 158 does `self.bitmap.font.shadow = 20`. On Windows shadow becomes
+ * true; here it raised TypeError and killed the level-up popup -- which fires
+ * from every skill use (skill -> stamina cost -> EXP gain -> popup).
+ *
+ * Widening this cannot regress a working game: the only inputs whose behavior
+ * changes are exactly those that used to raise, i.e. those that already made
+ * the game crash. true/false/nil keep their previous results bit for bit.
+ *
+ * argPos stays in the signature: rb_get_args' 'b' case and the DEF_PROP_B
+ * macro pass it positionally and share this prototype with the other
+ * rb_*_arg readers, which still report the offending argument index. */
 inline void rb_bool_arg(VALUE arg, bool *out, int argPos = 0) {
-    switch (rb_type(arg)) {
-        case RUBY_T_TRUE:
-            *out = true;
-            break;
-            
-        case RUBY_T_FALSE:
-        case RUBY_T_NIL:
-            *out = false;
-            break;
-            
-        default:
-            throw Exception(Exception::TypeError, "Argument %d: Expected bool", argPos);
-    }
+    (void) argPos;
+    *out = RTEST(arg) ? true : false;
 }
 
 /* rb_check_argc and rb_error_arity are both
