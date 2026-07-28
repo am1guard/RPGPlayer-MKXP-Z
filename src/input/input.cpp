@@ -713,7 +713,6 @@ struct InputPrivate
     
     // Gamepad axes & mouse coordinates
     int16_t axisStateArray[SDL_CONTROLLER_AXIS_MAX];
-    int mousePos[2];
     bool mouseInWindow;
     
     Input::ButtonCode repeating;
@@ -843,18 +842,41 @@ struct InputPrivate
                     return getState(Input::Alt);
                     break;
                     
+                /* Mouse buttons: read the pressed state LIVE from
+                 * EventThread::mouseState instead of states[], which is only
+                 * refreshed inside Input::update(). Pokemon Essentials XP games
+                 * (Pokemon Insurgence's PokemonControls) REPLACE Input.update
+                 * with their own Win32API-based version and never call the
+                 * native one, so states[] stays frozen for the whole session and
+                 * every mouse-driven UI (e.g. the challenge-run checkboxes,
+                 * which have no keyboard path at all) is dead to touch.
+                 * Input.raw_key_states was made live for exactly this reason in
+                 * v2.3.x -- see the "iOS INPUT FIX" comment in
+                 * binding/input-binding.cpp; this is the mouse counterpart.
+                 * triggered/released/repeated still come from the binding poll,
+                 * so games that DO call Input.update keep their edge semantics
+                 * bit for bit. */
                 case 0x1:
-                    return getState(Input::MouseLeft);
-                    break;
-                    
+                {
+                    ButtonState ms = getState(Input::MouseLeft);
+                    ms.pressed = EventThread::mouseState.buttons[SDL_BUTTON_LEFT];
+                    return ms;
+                }
+
                 case 0x2:
-                    return getState(Input::MouseRight);
-                    break;
-                    
+                {
+                    ButtonState ms = getState(Input::MouseRight);
+                    ms.pressed = EventThread::mouseState.buttons[SDL_BUTTON_RIGHT];
+                    return ms;
+                }
+
                 case 0x4:
-                    return getState(Input::MouseMiddle);
-                    break;
-                    
+                {
+                    ButtonState ms = getState(Input::MouseMiddle);
+                    ms.pressed = EventThread::mouseState.buttons[SDL_BUTTON_MIDDLE];
+                    return ms;
+                }
+
                 default:
                     ButtonState b;
                     try
@@ -1233,9 +1255,7 @@ void Input::update()
     p->updateRaw();
     p->updateControllerRaw();
     
-    // Record mouse positions
-    p->mousePos[0] = shState->eThread().mouseState.x;
-    p->mousePos[1] = shState->eThread().mouseState.y;
+    // Record mouse presence (the position itself is read live in mouseX/mouseY)
     p->mouseInWindow = shState->eThread().mouseState.inWindow;
     
     
@@ -1459,7 +1479,13 @@ int Input::mouseX()
 {
     RGSSThreadData &rtData = shState->rtData();
 
-    int hiresResult = (p->mousePos[0] - rtData.screenOffset.x) * rtData.sizeResoRatio.x;
+    /* Live pointer position (same reason as the mouse-button branches in
+     * getStateRaw): the old cached position snapshot was only refreshed inside
+     * Input::update(), which Pokemon Essentials XP games never call, leaving
+     * Mouse.getMousePos stuck at (0,0) forever. Reading mouseState directly is
+     * identical for games that do call Input.update -- same source, just not
+     * one frame stale. */
+    int hiresResult = (shState->eThread().mouseState.x - rtData.screenOffset.x) * rtData.sizeResoRatio.x;
 
     if (shState->config().enableHires) {
         double framebufferScalingFactor = shState->config().framebufferScalingFactor;
@@ -1473,7 +1499,7 @@ int Input::mouseY()
 {
     RGSSThreadData &rtData = shState->rtData();
 
-    int hiresResult = (p->mousePos[1] - rtData.screenOffset.y) * rtData.sizeResoRatio.y;
+    int hiresResult = (shState->eThread().mouseState.y - rtData.screenOffset.y) * rtData.sizeResoRatio.y;
 
     if (shState->config().enableHires) {
         double framebufferScalingFactor = shState->config().framebufferScalingFactor;

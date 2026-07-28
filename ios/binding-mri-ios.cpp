@@ -4057,14 +4057,26 @@ if Object.const_defined?(:Win32API)
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
       # Mouse buttons: VK_LBUTTON(0x01)/VK_RBUTTON(0x02)/VK_MBUTTON(0x04) are not
-      # keyboard scancodes; bridge them to the native pointer state via Input.pressex?
+      # keyboard scancodes; bridge them to the native pointer state
       # (0x1=MouseLeft, 0x2=MouseRight, 0x4=MouseMiddle). EventThread::mouseState is
       # fed by BOTH touch (SDL_FINGER -> left button) and physical mouse (GCMouse /
       # pointer -> left/right/middle), so VX Ace Win32API mouse scripts (Woratana/Seph
       # "Mouse System") that poll GetAsyncKeyState(VK_LBUTTON/RBUTTON) now detect
       # clicks. Placed before raw_key_states because it needs no key-state buffer.
+      #
+      # MUST NOT call the LIVE Input.pressex?: old Pokemon Essentials XP games
+      # (Pokemon Insurgence's PokemonControls) REDEFINE Input.pressex? on top of
+      # GetAsyncKeyState, so a live call re-enters the game's own input code and
+      # recurses forever (pressex? -> repeatcount -> updateKeyState -> getstate ->
+      # GetAsyncKeyState -> this proc -> pressex? ...) -> SystemStackError, seen on
+      # the name-entry screen where PokemonTextEntry sweeps Input.triggerex?(i)
+      # for i in 3...256 and reaches VK 4. Correction.rb's preload captures the
+      # NATIVE Input.pressex? Method object before game scripts can replace it and
+      # exposes it as $__mkxpz_native_mouse_button_proc; use only that reader here.
+      # Without it, return 0 (the pre-mouse-support behavior) instead of recursing.
       if vk_code == 0x01 || vk_code == 0x02 || vk_code == 0x04
-        return (Input.pressex?(vk_code) ? 1 : 0) rescue 0
+        return $__mkxpz_native_mouse_button_proc.call(vk_code) if $__mkxpz_native_mouse_button_proc
+        return 0
       end
       states = Input.raw_key_states rescue nil
       return 0 unless states
@@ -4280,14 +4292,26 @@ if Object.const_defined?(:Win32API)
   $__mkxpz_check_keystate_proc ||= lambda do |vk_code|
     begin
       # Mouse buttons: VK_LBUTTON(0x01)/VK_RBUTTON(0x02)/VK_MBUTTON(0x04) are not
-      # keyboard scancodes; bridge them to the native pointer state via Input.pressex?
+      # keyboard scancodes; bridge them to the native pointer state
       # (0x1=MouseLeft, 0x2=MouseRight, 0x4=MouseMiddle). EventThread::mouseState is
       # fed by BOTH touch (SDL_FINGER -> left button) and physical mouse (GCMouse /
       # pointer -> left/right/middle), so VX Ace Win32API mouse scripts (Woratana/Seph
       # "Mouse System") that poll GetAsyncKeyState(VK_LBUTTON/RBUTTON) now detect
       # clicks. Placed before raw_key_states because it needs no key-state buffer.
+      #
+      # MUST NOT call the LIVE Input.pressex?: old Pokemon Essentials XP games
+      # (Pokemon Insurgence's PokemonControls) REDEFINE Input.pressex? on top of
+      # GetAsyncKeyState, so a live call re-enters the game's own input code and
+      # recurses forever (pressex? -> repeatcount -> updateKeyState -> getstate ->
+      # GetAsyncKeyState -> this proc -> pressex? ...) -> SystemStackError, seen on
+      # the name-entry screen where PokemonTextEntry sweeps Input.triggerex?(i)
+      # for i in 3...256 and reaches VK 4. Correction.rb's preload captures the
+      # NATIVE Input.pressex? Method object before game scripts can replace it and
+      # exposes it as $__mkxpz_native_mouse_button_proc; use only that reader here.
+      # Without it, return 0 (the pre-mouse-support behavior) instead of recursing.
       if vk_code == 0x01 || vk_code == 0x02 || vk_code == 0x04
-        return (Input.pressex?(vk_code) ? 1 : 0) rescue 0
+        return $__mkxpz_native_mouse_button_proc.call(vk_code) if $__mkxpz_native_mouse_button_proc
+        return 0
       end
       states = Input.raw_key_states rescue nil
       return 0 unless states
