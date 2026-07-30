@@ -26,6 +26,7 @@
 #include <string.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib> // getenv (MKXPZ_VERBOSE_FS kapisi)
 
 #include <string>
 
@@ -504,39 +505,58 @@ RGSS_openRead(void *opaque, const char *filename)
 	std::string lowercaseName = toLowercase(filename);
 
 	if (!data->entryHash.contains(lowercaseName)) {
-		fprintf(stderr, "[MKXP-Z-RGSS] Request: '%s' -> NOT FOUND in archive (searched as '%s')\n", 
-		        filename, lowercaseName.c_str());
-        
-        // Advanced Logging: List all files in the requested directory to help debug encoding issues
-        std::string dirName = "";
-        size_t lastSlash = lowercaseName.rfind('/');
-        if (lastSlash != std::string::npos) {
-            dirName = lowercaseName.substr(0, lastSlash);
-        }
-        
-        if (data->dirHash.contains(dirName)) {
-             fprintf(stderr, "[MKXP-Z-RGSS] Contents of archive directory '%s' (lowercase keys):\n", dirName.c_str());
-             const BoostSet<std::string> &entries = data->dirHash[dirName];
-             for (BoostSet<std::string>::const_iterator it = entries.cbegin(); it != entries.cend(); ++it) {
-                 fprintf(stderr, " - %s\n", it->c_str());
-                 // Print Hex for non-ASCII chars
-                 bool hasNonAscii = false;
-                 for (size_t i = 0; i < it->length(); ++i) {
-                     if ((unsigned char)(*it)[i] > 127) {
-                         hasNonAscii = true;
-                         break;
-                     }
-                 }
-                 if (hasNonAscii) {
-                     fprintf(stderr, "   HEX: ");
+        /* Arsiv icinde bulunamama NORMAL bir durumdur: RGSS motoru her karede
+         * istege bagli dosyalari yoklar (splash varyantlari, opsiyonel
+         * windowskin/tileset'ler) ve yokluklarini kendisi ele alir. Bu yolu
+         * kosulsuz loglamak arsivli oyunlarin logunu tek basina bogar --
+         * olculdugunde Pokemon Iberia'nin 375.809 satirinin %84'u, Pokemon
+         * Insurgence'in %73'u, Pokemon Z'nin %62'si buradan cikan istek
+         * satirlari ve dizin dokumleriydi. Dokum tamamen kapsizdi: her miss
+         * dizindeki TUM girdileri, ustune ASCII olmayan adlarin HEX'ini
+         * basiyordu.
+         *
+         * Teshis degeri KORUNUYOR: dosya adi kodlama uyusmazligini arastirmak
+         * icin `MKXPZ_VERBOSE_FS` ile acilir -- `filesystem.cpp` icindeki
+         * per-dosya arama loglariyla ayni kapi (ayni arastirma ikisini birden
+         * ister). Gercek hatalar bu kapidan bagimsizdir: burada 0 dondugunde
+         * PHYSFS basarisiz olur, `FileSystem::openRead` istisna firlatir ve
+         * ust katman hatayi zaten loglar. */
+        static const bool verboseFS = getenv("MKXPZ_VERBOSE_FS") != nullptr;
+        if (verboseFS) {
+            fprintf(stderr, "[MKXP-Z-RGSS] Request: '%s' -> NOT FOUND in archive (searched as '%s')\n",
+                    filename, lowercaseName.c_str());
+
+            // Advanced Logging: List all files in the requested directory to help debug encoding issues
+            std::string dirName = "";
+            size_t lastSlash = lowercaseName.rfind('/');
+            if (lastSlash != std::string::npos) {
+                dirName = lowercaseName.substr(0, lastSlash);
+            }
+
+            if (data->dirHash.contains(dirName)) {
+                 fprintf(stderr, "[MKXP-Z-RGSS] Contents of archive directory '%s' (lowercase keys):\n", dirName.c_str());
+                 const BoostSet<std::string> &entries = data->dirHash[dirName];
+                 for (BoostSet<std::string>::const_iterator it = entries.cbegin(); it != entries.cend(); ++it) {
+                     fprintf(stderr, " - %s\n", it->c_str());
+                     // Print Hex for non-ASCII chars
+                     bool hasNonAscii = false;
                      for (size_t i = 0; i < it->length(); ++i) {
-                         fprintf(stderr, "%02X ", (unsigned char)(*it)[i]);
+                         if ((unsigned char)(*it)[i] > 127) {
+                             hasNonAscii = true;
+                             break;
+                         }
                      }
-                     fprintf(stderr, "\n");
+                     if (hasNonAscii) {
+                         fprintf(stderr, "   HEX: ");
+                         for (size_t i = 0; i < it->length(); ++i) {
+                             fprintf(stderr, "%02X ", (unsigned char)(*it)[i]);
+                         }
+                         fprintf(stderr, "\n");
+                     }
                  }
-             }
-        } else {
-            fprintf(stderr, "[MKXP-Z-RGSS] Archive directory '%s' not found.\n", dirName.c_str());
+            } else {
+                fprintf(stderr, "[MKXP-Z-RGSS] Archive directory '%s' not found.\n", dirName.c_str());
+            }
         }
 
 		return 0;

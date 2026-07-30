@@ -881,7 +881,15 @@ void FileSystem::openRead(OpenHandler &handler, const char *filename) {
     }
 
     // DEBUG: List contents of the directory to find potential matches
-    if (p->havePathCache) {
+    //
+    // 25 girdilik kapak tek bir miss'i ucuzlatti ama miss SAYISINI degistirmedi:
+    // Pokemon Iberia'nin bir oturumunda ~1.174 miss x 25 satir = 29.344 satir
+    // (logun %8'i) yalniz bu adaylar listesiydi. Liste yalniz dosya adi kodlama
+    // uyusmazligi arastirilirken okunur; o arastirma zaten `MKXPZ_VERBOSE_FS`
+    // ile acilan per-dosya arama loglarini da ister. Kapisiz kalan tek satir
+    // yukaridaki "openRead Failed" -- miss basina bir satir, teshis icin yeterli.
+    static const bool verboseFSList = getenv("MKXPZ_VERBOSE_FS") != nullptr;
+    if (verboseFSList && p->havePathCache) {
        std::string dirStr(dir);
        strTolower(dirStr); // Ensure directory key is lowercase
        

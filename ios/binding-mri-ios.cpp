@@ -74,6 +74,22 @@ extern const char module_rpg1[];
 extern const char module_rpg2[];
 extern const char module_rpg3[];
 
+/* Uyumluluk yamalarinin BASARI onaylari ("X installed successfully") boot
+ * basina ~17 satir yazar ve hicbir soru cevaplamaz: onemli olan yamanin
+ * kurulup kurulmadigidir, o da BASARISIZLIK dalindaki "Warning: Could not
+ * install ..." satiriyla zaten kosulsuz bildirilir (bkz. lessons-learned
+ * kural 10 -- bir guard'in kurulamamasi asla sessiz kalmamali).
+ *
+ * Onay satirlari `MKXPZ_VERBOSE_LOG` ile geri acilir. Bu kapi YALNIZ onaylari
+ * kapsar; script basina calisan "SYNTAX FIX" / "Ruby 3.x compat" satirlari
+ * kapsam DISIDIR -- onlar gercekten yapilan bir donusumu bildirir ve bir oyun
+ * boot edemediginde ilk bakilan yerdir. */
+static bool mkxpzVerboseInstallLog()
+{
+    static const bool on = getenv("MKXPZ_VERBOSE_LOG") != nullptr;
+    return on;
+}
+
 static VALUE topSelf;
 
 static void mriBindingExecute();
@@ -270,7 +286,8 @@ static void initStaticRubyEncodingsForIOS() {
     );
 
     if (state == 0) {
-        Debug() << "Static Ruby encodings initialized directly for iOS";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Static Ruby encodings initialized directly for iOS";
         return;
     }
 
@@ -513,7 +530,8 @@ static void mriBindingInit() {
     // For iOS with statically linked Ruby extensions, initialize zlib directly.
     // Legacy encoding/transcoder bootstrap is handled once during Ruby VM startup.
     Init_zlib();
-    Debug() << "Zlib initialized directly for static linking (StringIO will be polyfilled)";
+    if (mkxpzVerboseInstallLog())
+        Debug() << "Zlib initialized directly for static linking (StringIO will be polyfilled)";
     
     // =============================================================================
     // SUPERCLASS MISMATCH FIX FOR OLD RPG MAKER SCRIPTS
@@ -627,7 +645,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "Superclass mismatch fix installed";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Superclass mismatch fix installed";
     } else {
         Debug() << "Warning: Could not install superclass mismatch fix";
         rb_errinfo();
@@ -691,7 +710,8 @@ static void mriBindingInit() {
         "end\n",
         &state);
     if (state == 0) {
-        Debug() << "Encoding constants defined successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Encoding constants defined successfully";
     } else {
         Debug() << "Warning: Could not define Encoding constants";
         // Clear the error state
@@ -724,7 +744,8 @@ static void mriBindingInit() {
         , &state);
     
     if (state == 0) {
-        Debug() << "Ruby compatibility shims defined successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Ruby compatibility shims defined successfully";
     } else {
         Debug() << "Warning: Could not define Ruby compatibility shims";
         rb_errinfo();
@@ -754,7 +775,8 @@ static void mriBindingInit() {
         , &state);
     
     if (state == 0) {
-        Debug() << "Font.exist? compatibility patch installed";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Font.exist? compatibility patch installed";
     } else {
         Debug() << "Warning: Could not install Font.exist? patch";
         rb_errinfo();
@@ -832,7 +854,8 @@ static void mriBindingInit() {
         , &state);
     
     if (state == 0) {
-        Debug() << "Private method visibility fix installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Private method visibility fix installed successfully";
     } else {
         Debug() << "Warning: Could not install private method visibility fix";
         rb_errinfo();
@@ -863,7 +886,8 @@ static void mriBindingInit() {
         &state);
 
     if (state == 0) {
-        Debug() << "Array#[] nil-index tolerance installed at C-level";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Array#[] nil-index tolerance installed at C-level";
     } else {
         Debug() << "Warning: Could not install Array#[] nil-index tolerance";
         rb_errinfo();
@@ -898,7 +922,8 @@ static void mriBindingInit() {
         &state);
 
     if (state == 0) {
-        Debug() << "Bitmap.new missing-file fallback installed at C-level";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Bitmap.new missing-file fallback installed at C-level";
     } else {
         Debug() << "Warning: Could not install Bitmap.new missing-file fallback";
         rb_errinfo();
@@ -1057,7 +1082,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "RGSS Linker stub and require patch installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "RGSS Linker stub and require patch installed successfully";
     } else {
         Debug() << "Warning: Could not install RGSS Linker stub";
         rb_errinfo();
@@ -1115,7 +1141,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "FmodEx stub installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "FmodEx stub installed successfully";
     } else {
         Debug() << "Warning: Could not install FmodEx stub";
         rb_errinfo();
@@ -1129,7 +1156,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "BASS stub installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "BASS stub installed successfully";
         MKXP_DEBUG_LOG("DEBUG: mriBindingInit completed successfully");
     } else {
         Debug() << "Warning: Could not install BASS stub";
@@ -1161,7 +1189,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "Kernel#throw uncaught throw handler installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Kernel#throw uncaught throw handler installed successfully";
         MKXP_DEBUG_LOG("DEBUG: Kernel#throw patch installed");
     } else {
         Debug() << "Warning: Could not install Kernel#throw patch";
@@ -1201,7 +1230,8 @@ static void mriBindingInit() {
             &state);
         
         if (state == 0) {
-            Debug() << "Fixnum/Bignum compatibility shims installed";
+            if (mkxpzVerboseInstallLog())
+                Debug() << "Fixnum/Bignum compatibility shims installed";
         } else {
             Debug() << "Warning: Could not install Fixnum/Bignum shims";
             rb_errinfo();
@@ -1413,7 +1443,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "Ruby 3.x alias_method compatibility shim installed";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Ruby 3.x alias_method compatibility shim installed";
     } else {
         Debug() << "Warning: Could not install alias_method compatibility shim";
         rb_errinfo();
@@ -1498,7 +1529,8 @@ static void mriBindingInit() {
         &state);
     
     if (state == 0) {
-        Debug() << "NilClass comparison fix installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "NilClass comparison fix installed successfully";
     } else {
         Debug() << "Warning: Could not install NilClass comparison fix";
         rb_errinfo();
@@ -1528,7 +1560,8 @@ static void mriBindingInit() {
         &state);
         
     if (state == 0) {
-        Debug() << "Dir.pwd encoding fix installed successfully";
+        if (mkxpzVerboseInstallLog())
+            Debug() << "Dir.pwd encoding fix installed successfully";
     } else {
         Debug() << "Warning: Could not install Dir.pwd encoding fix";
         rb_errinfo();
