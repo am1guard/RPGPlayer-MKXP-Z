@@ -1,0 +1,7 @@
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/mkxpz.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/edit_cache.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/rebuild_cache.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/list_install_components.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/install.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/install/local.dir
+/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/catalyst/build/CMakeFiles/install/strip.dir
