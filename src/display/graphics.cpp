@@ -516,7 +516,6 @@ public:
         shState->prepareDraw();
         
         pp.startRender();
-        
         glState.viewport.set(IntRect(0, 0, w, h));
         
         FBO::clear();
@@ -1158,8 +1157,21 @@ struct GraphicsPrivate {
         
         gl.Disable(GL_SCISSOR_TEST);
         
-        // Also force correct viewport explicitly here
-        if (drW > 0) gl.Viewport(0, 0, drW, drH);
+        /* Viewport'u glState UZERINDEN ayarla, gl.Viewport() ile DEGIL.
+         *
+         * gl.Viewport() dogrudan cagrilirsa glState'in onbellegi guncellenmez ve
+         * GL ile onbellek DESENKRON kalir. GLProperty::set() "deger zaten ayni"
+         * gorup GL'e hic yazmadigi icin (glstate.h), bir sonraki karede
+         * ScreenScene::composite()'in glState.viewport.set(0,0,scRes) cagrisi
+         * SESSIZCE ATLANIR: oyun kendi 512x384 tamponuna cizerken GL viewport
+         * 1024x768 kalir, icerik tam 2x buyuk cizilir ve tampona sigmaz.
+         *
+         * iOS'ta bu hata gorunmez cunku GLES2'de glBlitFramebuffer yoktur;
+         * ekrana blit shader yolundan gider ve oradaki viewport.pushSet/pop
+         * onbellegi kazara yeniden senkronlar. Mac Catalyst desktop GL
+         * kullandigi icin native blit yolu isler, push/pop olmaz ve desenkron
+         * kalici hale gelir. */
+        if (drW > 0) glState.viewport.set(IntRect(0, 0, drW, drH));
 
         GLMeta::blitBeginScreen(blitSize, scaleIsSpecial);
         //GLMeta::blitSource(screen.getPP().frontBuffer(), scaleIsSpecial);
