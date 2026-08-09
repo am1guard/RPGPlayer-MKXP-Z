@@ -153,7 +153,14 @@ set(MKXPZ_SOURCES
     # filesystemImplApple-ios.mm ayni sembolleri Apple'a ozgu bicimde saglar
     # (getDefaultGameRoot, setCurrentDirectory, ...). Ikisi birden listelenirse
     # dogrudan link'te 'duplicate symbol' alinir.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../ios/filesystemImplApple-ios.mm  # iOS-specific Apple implementation
+    # filesystemImpl.cpp genel sembolleri saglar (fileExists, selectPath,
+    # normalizePath, getDefaultGameRoot, ...).
+    # filesystemImplApple-ios.mm BURAYA EKLENMEZ: ayni sembol kumesini Apple'a
+    # ozgu bicimde tekrar tanimlar ve .cpp ile 'duplicate symbol' verir. Asset
+    # yollari (getPathForAsset/contentsOfAssetAsString) ana uygulamanin
+    # filesystemImplApple_override.mm dosyasindan gelir.
+    ${MKXPZ_SRC_DIR}/filesystem/filesystemImpl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/filesystemImplCatalyst.mm
     
     # Input
     ${MKXPZ_SRC_DIR}/input/input.cpp
@@ -164,18 +171,16 @@ set(MKXPZ_SOURCES
     ${MKXPZ_SRC_DIR}/net/net.cpp
     
     # System (use iOS-specific version)
-    # systemImpl.cpp BILEREK YOK: systemImplApple.mm asagidaki alti sembolun
-    # hepsini Apple'a ozgu bicimde saglar (getUserName, isWine, isRosetta,
-    # getRealHostType, getSystemLanguage, getScalingFactor). Ikisi birden
-    # listelenirse dogrudan link'te 'duplicate symbol' alinir. iOS hedefinde
-    # bu catisma Xcode'un arsivden secici cekmesi sayesinde yuzeye cikmaz.
+    ${MKXPZ_SRC_DIR}/system/systemImpl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../ios/systemImplApple.mm  # iOS-compatible version
     
-    # Uygulamanin motor API katmani (Rpgplayer/mkxpz_ios_api.mm).
-    # ANA THREAD'de SDL+GL kurar, RGSS oyun dongusunu AYRI thread'de baslatir
-    # (SDL_CreateThreadWithStackSize). Bu katman olmadan SDL_main ana thread'i
-    # bloke eder, UIKit cizemez ve oyun SDL_QUIT ile SystemExit alir.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../Rpgplayer/mkxpz_ios_api.mm
+    # NOT: Rpgplayer/mkxpz_ios_api.mm BURAYA EKLENMEZ.
+    # Ana uygulama (Rpgplayer.xcodeproj) o dosyayi ZATEN kendi hedefinde derler.
+    # Kutuphaneye de konursa, mkxpz_ios_api.mm'in cagirdigi filesystemImpl
+    # sembolleri arsivden filesystemImplApple-ios.mm.o'yu da cektirir ve ana
+    # projedeki filesystemImplApple_override.o ile 'duplicate symbol' verir.
+    # Bagimsiz bir Catalyst denemesi (RPGPlayerMac) bu dosyayi kendi hedefine
+    # ekleyerek kullanir.
 
     # Ruby Bindings (use iOS-patched version for binding-mri)
     ${CMAKE_CURRENT_SOURCE_DIR}/../ios/binding-mri-ios.cpp  # Patched for iOS std::system unavailability

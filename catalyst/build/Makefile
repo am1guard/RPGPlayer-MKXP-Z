@@ -174,14 +174,6 @@ mkxpz/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/build
 .PHONY : mkxpz/fast
 
-Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.o: Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.mm.o
-.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.o
-
-# target to build an object file
-Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.mm.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.mm.o
-.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.mm.o
-
 Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.cpp.o
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.o
 
@@ -685,14 +677,6 @@ Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/bin
 Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.cpp.s
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.cpp.s
-
-Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.mm.o
-.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.o
-
-# target to build an object file
-Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.mm.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.mm.o
-.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.mm.o
 
 Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/systemImplApple.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/systemImplApple.mm.o
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/systemImplApple.o
@@ -1638,6 +1622,30 @@ Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/fil
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystem.cpp.s
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystem.cpp.s
 
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.o
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.o
+
+# target to build an object file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.o
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.o
+
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.i: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.i
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.i
+
+# target to preprocess a source file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.i
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.i
+
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.s: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.s
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.s
+
+# target to generate assembly for a file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.s
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.cpp.s
+
 Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.cpp.o
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.o
 
@@ -1806,6 +1814,30 @@ Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sha
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sharedstate.cpp.s
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sharedstate.cpp.s
 
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.o
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.o
+
+# target to build an object file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.o
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.o
+
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.i: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.i
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.i
+
+# target to preprocess a source file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.i
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.i
+
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.s: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.s
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.s
+
+# target to generate assembly for a file
+Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.s
+.PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.cpp.s
+
 Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.o: Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.c.o
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.o
 
@@ -1878,6 +1910,14 @@ Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/uti
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/util/win-consoleutils.cpp.s
 .PHONY : Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/util/win-consoleutils.cpp.s
 
+filesystemImplCatalyst.o: filesystemImplCatalyst.mm.o
+.PHONY : filesystemImplCatalyst.o
+
+# target to build an object file
+filesystemImplCatalyst.mm.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mkxpz.dir/build.make CMakeFiles/mkxpz.dir/filesystemImplCatalyst.mm.o
+.PHONY : filesystemImplCatalyst.mm.o
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -1891,7 +1931,6 @@ help:
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
 	@echo "... mkxpz"
-	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/Rpgplayer/mkxpz_ios_api.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/binding/audio-binding.s"
@@ -1955,7 +1994,6 @@ help:
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/binding-mri-ios.s"
-	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/systemImplApple.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/audio/alstream.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/audio/alstream.i"
@@ -2074,6 +2112,9 @@ help:
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystem.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystem.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystem.s"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.o"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.i"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/filesystem/filesystemImpl.s"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/input/input.s"
@@ -2095,6 +2136,9 @@ help:
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sharedstate.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sharedstate.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/sharedstate.s"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.o"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.i"
+	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/system/systemImpl.s"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/theoraplay/theoraplay.s"
@@ -2104,6 +2148,7 @@ help:
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/util/win-consoleutils.o"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/util/win-consoleutils.i"
 	@echo "... Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/src/util/win-consoleutils.s"
+	@echo "... filesystemImplCatalyst.o"
 .PHONY : help
 
 

@@ -28,5 +28,3 @@ OBJCXX_FLAGSarm64 = -target arm64-apple-ios17.0-macabi -isystem /Applications/Xc
 
 OBJCXX_FLAGS = -target arm64-apple-ios17.0-macabi -isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk/System/iOSSupport/usr/include -iframework /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk/System/iOSSupport/System/Library/Frameworks -O3 -DNDEBUG -std=gnu++14 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -Wno-non-virtual-dtor -Wno-reorder -Wno-uninitialized -Wno-unknown-pragmas -Wno-deprecated-declarations -Wno-incompatible-pointer-types -Wno-pointer-sign -Wno-incompatible-pointer-types-discards-qualifiers -fdeclspec
 
-# Custom flags: CMakeFiles/mkxpz.dir/Users/han/Kod/rpgplayerfullcalisan-main/rpgplayerxpvxvxacesupport/mkxp-z/ios/filesystemImplApple-ios.mm.o_FLAGS = -fobjc-arc
-
