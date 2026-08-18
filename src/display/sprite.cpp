@@ -154,7 +154,45 @@ struct SpritePrivate
     {
         if (nullOrDisposed(bitmap))
             return;
-        
+
+        /* iOS FIX (Pokemon Soulstones 2 / Time Wardens: "gece yollarda cizgiler",
+         * Infinite Fusion: "bir kasabada yatay cizgiler"). sprite.frag bush
+         * efektini dallanmasiz uygular:
+         *     lowp float underBush = float(v_texCoord.y < bushDepth);
+         *     frag.a *= clamp(bushOpacity + underBush, 0.0, 1.0);
+         * bush KAPALIYKEN (bushDepth == 0) asagidaki formul efBushDepth'i tam
+         * olarak sprite'in EN ALT texel sinirina, (srcRect.y + srcRect.height) /
+         * bitmap.height()'a esitler. Yani "her yerde true" niyeti, kiyaslamanin
+         * son piksel sirasinda kil payi dogru cikmasina BAGLIDIR.
+         *
+         * Masaustunde bu tutar (shader/common.h desktop GLSL'de highp/mediump/lowp
+         * niteleyicilerini #define ile siler -> 32-bit float). GLES'te ise ayni
+         * baslik fragment shader'a "precision mediump float" verir: 16-bit half,
+         * 10-bit mantis. PE v19+ TilemapRenderer her karoyu ortak tileset
+         * ATLAS'indan ornekledigi icin bir karo normalize uzayda yalniz
+         * 32/atlas_yuksekligi kadar yer kaplar (iOS'ta atlas 4096 -> 0.0078, yani
+         * 0.5 civarinda ~16 ULP). Son fragment sirasi sinirin ~0.25 ULP altinda
+         * kalir; mediump yuvarlamasi + varying interpolasyon hatasi bu kiyasi
+         * yazi-tura yapar. Yanlis dusen sirada underBush 0 olur ve alfa
+         * bushOpacity (varsayilan 128/255 = 0.50) ile carpilir -> her karonun
+         * altinda yari saydam yatay bir cizgi.
+         *
+         * Bu yalniz SpriteShader yolunda gorunur; o yol da ancak tone/color/flash/
+         * invert/pattern varken secilir. Pokemon Essentials gece tonunu
+         * (pbDayNightTint) tilemap'e uyguladigi icin cizgiler TAM OLARAK geceleri
+         * ortaya cikar, gunduz kaybolur.
+         *
+         * Cozum: bush kapaliyken kiyaslamayi hassasiyetten bagimsiz kil. Texture
+         * koordinati asla 1.0'i asmadigindan esigi 2.0'a itmek underBush'u her
+         * fragment icin 1 yapar -> frag.a *= clamp(bushOpacity + 1, 0, 1) = *1.0,
+         * yani efektin ZATEN amaclanan tam no-op'u. bushDepth != 0 iken davranis
+         * bit-bit AYNI kalir (gercek bush kesimi degismez). */
+        if (bushDepth == 0)
+        {
+            efBushDepth = 2.0f;
+            return;
+        }
+
         /* Calculate effective (normalized) bush depth */
         float texBushDepth = (bushDepth / trans.getScale().y) -
         (srcRect->y + srcRect->height) +
